@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'dart:io';
 import '../../core/constants.dart';
 import 'chat_list_screen.dart';
 import 'group_list_screen.dart';
@@ -6,6 +7,7 @@ import 'discovery_screen.dart';
 import 'settings_screen.dart';
 import 'emergency_alert_screen.dart';
 import '../../services/chat_provider.dart';
+import '../../utils/background_utils.dart';
 import 'package:provider/provider.dart';
 import 'dart:async';
 
@@ -36,7 +38,31 @@ class _MainScreenState extends State<MainScreen> {
       _sosSubscription = chatProvider.messagingService.sosAlerts.listen((alert) {
         _showEmergencySOS(alert);
       });
+      _checkBatteryOptimizations();
     });
+  }
+
+  Future<void> _checkBatteryOptimizations() async {
+    if (Platform.isAndroid) {
+      final isIgnored = await BackgroundUtils.isBatteryOptimizationIgnored();
+      if (!isIgnored) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: const Text('Background performance may be delayed. Disable battery optimization in Settings.'),
+            backgroundColor: Colors.orangeAccent.withValues(alpha: 0.9),
+            duration: const Duration(seconds: 10),
+            action: SnackBarAction(
+              label: 'Settings',
+              textColor: Colors.white,
+              onPressed: () {
+                Navigator.pushNamed(context, '/settings');
+              },
+            ),
+          ),
+        );
+      }
+    }
   }
 
   @override

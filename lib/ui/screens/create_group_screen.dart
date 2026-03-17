@@ -56,7 +56,7 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
                 _nameController.text,
                 _selectedPeerUuids,
               );
-              if (!mounted) return;
+              if (!context.mounted) return;
               Navigator.pop(context);
             },
             child: Text(

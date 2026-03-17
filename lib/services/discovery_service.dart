@@ -1,10 +1,13 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
+import 'dart:math';
 import 'package:nearby_connections/nearby_connections.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../models/device_model.dart';
 import 'package:flutter/foundation.dart';
-
+import '../utils/connectivity_logger.dart';
 
 import '../models/session_state.dart';
 
@@ -26,6 +29,8 @@ class DiscoveryService {
   static const String serviceId = "com.example.airlink";
   Strategy strategy =
       Strategy.P2P_CLUSTER; // Using P2P_CLUSTER for mesh-like connectivity
+
+  static const int _targetDirectPeers = 3; // Target number of simultaneous direct connections
 
   final _discoveredDevicesController =
       StreamController<List<Device>>.broadcast();
@@ -56,6 +61,58 @@ class DiscoveryService {
   
   bool get isCurrentlyBrowsing => _isBrowsing;
   bool get isCurrentlyAdvertising => _isAdvertising;
+
+  Timer? _refreshTimer;
+  int _currentBatteryLevel = 100;
+
+  void _startRefreshTimer() {
+    _refreshTimer?.cancel();
+    
+    // Aggressive interval based on battery and current connection count
+    int connectedCount = getConnectedDevices().length;
+    bool needsMorePeers = connectedCount < _targetDirectPeers;
+    
+    int minutes = needsMorePeers ? 1 : 2; 
+    if (_currentBatteryLevel < 15) {
+      minutes = needsMorePeers ? 4 : 8; 
+    } else if (_devices.any((d) => d.isPluggedIn)) {
+      minutes = 0; // Use seconds for ultra-fast
+    }
+
+    final jitter = Random().nextInt(10) - 5; // Reduced jitter for more predictability
+    Duration interval;
+    if (minutes == 0) {
+      interval = Duration(seconds: needsMorePeers ? 15 : 30); 
+    } else {
+      interval = Duration(minutes: minutes) + Duration(seconds: jitter);
+    }
+    
+    _refreshTimer = Timer.periodic(interval, (timer) async {
+      ConnectivityLogger.debug(LogCategory.discovery,
+          'Periodic refresh: Restarting browsing/advertising...');
+      if (_isBrowsing) await startBrowsing(forceRestart: true);
+      if (_isAdvertising) await startAdvertising(forceRestart: true);
+
+      // Also trigger a background reconnect check for known devices
+      _checkBackgroundReconnections();
+    });
+  }
+
+  void _checkBackgroundReconnections() {
+    debugPrint('[DiscoveryService] Checking for background reconnections...');
+    for (var entry in _knownDevices.entries) {
+      final uuid = entry.key;
+      final name = entry.value;
+
+      // If we don't have this device in our lists or it's not connected, try to find/connect
+      final device = getDeviceByUuid(uuid);
+      if (device != null && device.state == SessionState.notConnected) {
+        debugPrint(
+            '[DiscoveryService] Background recon: Attempting to reconnect to $name ($uuid)');
+        connect(device);
+      }
+    }
+  }
 
   void setKnownDevices(List<Map<String, String>> devices) {
     _knownDevices = {for (var d in devices) d['uuid']!: d['name']!};
@@ -89,12 +146,12 @@ class DiscoveryService {
     if (isBackbone != null) _devices[index].isBackbone = isBackbone;
     if (isPluggedIn != null) _devices[index].isPluggedIn = isPluggedIn;
     
-    // Auto-update RSSI if it was extremely low to make it "visible" to mesh logic
-    if (_devices[index].rssi <= -100) {
-      _devices[index].rssi = -60.0; // Assume decent signal if we get a battery update
-      significant = true;
+    // Update local state if it's "me" or just use it to adjust frequency
+    _currentBatteryLevel = batteryLevel;
+    if (significant) {
+      _startRefreshTimer(); // Adaptive frequency update
     }
-    
+
     if (significant) {
       _discoveredDevicesController.sink.add(List.from(_devices));
       debugPrint(
@@ -125,6 +182,9 @@ class DiscoveryService {
     _localUuid = localUuid;
     _devices.clear();
     bool permissionsGranted = await _requestPermissions();
+    if (permissionsGranted) {
+      _startRefreshTimer();
+    }
     return permissionsGranted;
   }
 
@@ -155,7 +215,7 @@ class DiscoveryService {
     // Aggressively try to stop to prevent STATUS_ALREADY_DISCOVERING
     if (_isBrowsing || forceRestart) {
       await stopDiscovery();
-      await Future.delayed(const Duration(milliseconds: 300)); // Increased safety delay
+      await Future.delayed(const Duration(milliseconds: 100)); // Minimal safety delay
     }
 
     try {
@@ -196,10 +256,10 @@ class DiscoveryService {
               
               if (lastRetry != null) {
                 final diff = DateTime.now().difference(lastRetry).inSeconds;
-                // Wait time: 0, 10, 30, 60, 120... (max 5 minutes)
+                // Instant retry on first failure, then aggressive backoff: 0, 5, 20, 60...
                 int waitTime = 0;
                 if (retryCount > 0) {
-                  waitTime = (retryCount == 1 ? 10 : (retryCount == 2 ? 30 : (retryCount == 3 ? 60 : 300)));
+                  waitTime = (retryCount == 1 ? 5 : (retryCount == 2 ? 20 : (retryCount == 3 ? 60 : 180)));
                 }
 
                 if (diff < waitTime) {
@@ -222,9 +282,8 @@ class DiscoveryService {
                 debugPrint(
                   '[DiscoveryService] Found known device "$displayName" ($discoveredUuid). Tie-breaker LOST. Waiting for peer to initiate...',
                 );
-                // Wait a bit longer (e.g. 15s), then try ourselves if the peer hasn't connected
-                // This acts as a fallback in case the peer's tie-breaker implementation fails
-                Future.delayed(const Duration(seconds: 15), () {
+                // Extreme fallback delay of 500ms for "instant" feel
+                Future.delayed(const Duration(milliseconds: 500), () {
                   final idx = _devices.indexWhere((d) => d.deviceId == id);
                   if (idx >= 0 && _devices[idx].state == SessionState.notConnected) {
                     debugPrint(
@@ -278,7 +337,7 @@ class DiscoveryService {
     // Aggressively try to stop to prevent STATUS_ALREADY_ADVERTISING
     if (_isAdvertising || forceRestart) {
       await stopAdvertising();
-      await Future.delayed(const Duration(milliseconds: 300)); // Increased safety delay
+      await Future.delayed(const Duration(milliseconds: 100)); // Minimal safety delay
     }
 
     try {
@@ -317,7 +376,19 @@ class DiscoveryService {
                 '[DiscoveryService] Payload received from $endpointId (ID: ${payload.id})',
               );
               if (payload.type == PayloadType.BYTES) {
-                String str = utf8.decode(payload.bytes!);
+                Uint8List bytes = payload.bytes!;
+                String str;
+                
+                if (bytes.length > 2 && bytes[0] == 0x1f && bytes[1] == 0x8b) {
+                  try {
+                    final decoded = gzip.decode(bytes);
+                    str = utf8.decode(decoded);
+                  } catch (e) {
+                    str = utf8.decode(bytes);
+                  }
+                } else {
+                  str = utf8.decode(bytes);
+                }
                 _dataReceivedController.sink.add({
                   'senderId': endpointId,
                   'payload': str,
@@ -369,6 +440,14 @@ class DiscoveryService {
     }
   }
 
+  /// Refreshes the radio by restarting discovery and advertising if they were active.
+  /// This is used for background wake-ups to ensure the Nearby radio stays alive.
+  void refreshRadio() {
+    debugPrint('[DiscoveryService] Refreshing radio (Active: Discovery=$_isBrowsing, Advertising=$_isAdvertising)');
+    if (_isBrowsing) startBrowsing(forceRestart: true);
+    if (_isAdvertising) startAdvertising(forceRestart: true);
+  }
+
   Future<void> connect(Device device) async {
     if (device.state == SessionState.connecting ||
         device.state == SessionState.connected) {
@@ -414,7 +493,21 @@ class DiscoveryService {
                 '[DiscoveryService] Payload received from $endpointId (ID: ${payload.id})',
               );
               if (payload.type == PayloadType.BYTES) {
-                String str = utf8.decode(payload.bytes!);
+                Uint8List bytes = payload.bytes!;
+                String str;
+                
+                // GZIP Consistency Fix: Check for magic bytes
+                if (bytes.length > 2 && bytes[0] == 0x1f && bytes[1] == 0x8b) {
+                  try {
+                    final decoded = gzip.decode(bytes);
+                    str = utf8.decode(decoded);
+                  } catch (e) {
+                    str = utf8.decode(bytes);
+                  }
+                } else {
+                  str = utf8.decode(bytes);
+                }
+
                 _dataReceivedController.sink.add({
                   'senderId': endpointId,
                   'payload': str,
@@ -479,7 +572,19 @@ class DiscoveryService {
 
   Future<int?> sendMessageToEndpoint(String endpointId, String message) async {
     try {
-      final bytes = Uint8List.fromList(utf8.encode(message));
+      Uint8List bytes = Uint8List.fromList(utf8.encode(message));
+      
+      // Compress if larger than 128 bytes to save bandwidth
+      if (bytes.length > 128) {
+        try {
+          final compressed = gzip.encode(bytes);
+          bytes = Uint8List.fromList(compressed);
+          debugPrint('[DiscoveryService] Compressed payload from ${utf8.encode(message).length} to ${bytes.length} bytes');
+        } catch (e) {
+          debugPrint('[DiscoveryService] Compression failed: $e');
+        }
+      }
+
       final payloadId = DateTime.now().millisecondsSinceEpoch;
       await Nearby().sendBytesPayload(
         endpointId,
@@ -626,12 +731,71 @@ class DiscoveryService {
     }
   }
 
+  /// Handle radio (Bluetooth/WiFi) state changes.
+  /// Automatically restarts discovery when radios come back online.
+  Future<void> onRadioStateChanged(String radioType, bool enabled) async {
+    ConnectivityLogger.event(
+      LogCategory.radio,
+      '$radioType ${enabled ? "enabled" : "disabled"}',
+      data: {'browsing': _isBrowsing, 'advertising': _isAdvertising},
+    );
+
+    if (enabled) {
+      // Radio turned ON — restart discovery after a ultra-short stabilization delay
+      await Future.delayed(const Duration(milliseconds: 500));
+      if (_isBrowsing) {
+        ConnectivityLogger.info(LogCategory.discovery,
+            'Radio ON ($radioType) — restarting browsing');
+        await startBrowsing(forceRestart: true);
+      }
+      if (_isAdvertising) {
+        ConnectivityLogger.info(LogCategory.discovery,
+            'Radio ON ($radioType) — restarting advertising');
+        await startAdvertising(forceRestart: true);
+      }
+    } else {
+      // Radio turned OFF — pause gracefully (connections will drop anyway)
+      ConnectivityLogger.warning(LogCategory.discovery,
+          'Radio OFF ($radioType) — discovery paused');
+    }
+  }
+
+  /// Persist discovery state (browsing/advertising) for crash recovery.
+  Future<void> persistDiscoveryState() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool('discovery_was_browsing', _isBrowsing);
+      await prefs.setBool('discovery_was_advertising', _isAdvertising);
+      ConnectivityLogger.debug(LogCategory.discovery,
+          'Persisted state: browsing=$_isBrowsing, advertising=$_isAdvertising');
+    } catch (e) {
+      ConnectivityLogger.error(LogCategory.discovery, 'Failed to persist state', e);
+    }
+  }
+
+  /// Restore discovery state after crash/restart.
+  /// Returns true if discovery should be restarted.
+  Future<bool> restoreDiscoveryState() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final wasBrowsing = prefs.getBool('discovery_was_browsing') ?? false;
+      final wasAdvertising = prefs.getBool('discovery_was_advertising') ?? false;
+      ConnectivityLogger.info(LogCategory.discovery,
+          'Restored state: wasBrowsing=$wasBrowsing, wasAdvertising=$wasAdvertising');
+      return wasBrowsing || wasAdvertising;
+    } catch (e) {
+      ConnectivityLogger.error(LogCategory.discovery, 'Failed to restore state', e);
+      return false;
+    }
+  }
+
   void dispose() {
     _discoveredDevicesController.close();
     _connectedDeviceController.close();
     _dataReceivedController.close();
     _payloadProgressController.close();
     _fileReceivedController.close();
+    _refreshTimer?.cancel();
     stopAll();
   }
 }

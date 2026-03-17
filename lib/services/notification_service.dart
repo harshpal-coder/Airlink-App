@@ -135,6 +135,7 @@ class NotificationService {
       mePerson,
       groupConversation: false,
       messages: notificationMessages,
+      conversationTitle: senderName ?? title,
     );
 
     final AndroidNotificationDetails androidPlatformChannelSpecifics =
@@ -146,15 +147,18 @@ class NotificationService {
       styleInformation: messagingStyle,
       color: const Color(0xFF0D47A1), // AirLink Blue
       showWhen: true,
+      when: DateTime.now().millisecondsSinceEpoch,
       category: AndroidNotificationCategory.message,
       shortcutId: senderUuid,
+      groupKey: 'com.airlink.messages.${senderUuid ?? "default"}',
+      setAsGroupSummary: false,
       largeIcon: senderProfileImage != null ? FilePathAndroidBitmap(senderProfileImage) : null,
       actions: <AndroidNotificationAction>[
-        const AndroidNotificationAction(
+        AndroidNotificationAction(
           'reply_action',
           'Reply',
           inputs: [
-            AndroidNotificationActionInput(
+            const AndroidNotificationActionInput(
               label: 'Type your message...',
             ),
           ],
@@ -164,17 +168,37 @@ class NotificationService {
           'Mark as Read',
         ),
       ],
+      onlyAlertOnce: true,
     );
 
     final NotificationDetails platformChannelSpecifics =
         NotificationDetails(android: androidPlatformChannelSpecifics);
 
+    final int notificationId = senderUuid?.hashCode.remainder(100000) ?? DateTime.now().millisecondsSinceEpoch.remainder(100000);
+
     await _notificationsPlugin.show(
-      id: senderUuid?.hashCode.remainder(100000) ?? DateTime.now().millisecondsSinceEpoch.remainder(100000),
+      id: notificationId,
       title: senderName ?? title,
       body: body,
       notificationDetails: platformChannelSpecifics,
       payload: senderUuid, // Pass senderUuid as payload for navigation
+    );
+
+    // Show group summary
+    final AndroidNotificationDetails summaryDetails = AndroidNotificationDetails(
+      'airlink_messages',
+      'AirLink Messages',
+      importance: Importance.high,
+      priority: Priority.high,
+      groupKey: 'com.airlink.messages.${senderUuid ?? "default"}',
+      setAsGroupSummary: true,
+      color: const Color(0xFF0D47A1),
+    );
+    await _notificationsPlugin.show(
+      id: (senderUuid?.hashCode ?? 0) + 1,
+      title: senderName ?? title,
+      body: 'New messages',
+      notificationDetails: NotificationDetails(android: summaryDetails),
     );
   }
 
@@ -185,7 +209,7 @@ class NotificationService {
       'AirLink SOS Alerts',
       channelDescription: 'Emergency SOS alerts from nearby devices',
       importance: Importance.max,
-      priority: Priority.high,
+      priority: Priority.max,
       ticker: 'SOS',
       color: Colors.red,
       ledColor: Colors.red,

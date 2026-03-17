@@ -1,0 +1,55 @@
+﻿Running Gradle task 'assembleRelease'...                        
+flutter : /C:/Users/harsh/AppData/Local/Pub/Cache/hosted/pub.dev/record_
+linux-0.7.2/lib/record_linux.dart:12:7: Error: The non-abstract class 
+'RecordLinux' is missing implementations for these members:
+At line:1 char:1
++ flutter build apk --release > build_error.txt 2>&1
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (/C:/Users/harsh... these m 
+   embers::String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+ - RecordMethodChannelPlatformInterface.startStream
+Try to either
+ - provide an implementation,
+ - inherit an implementation from a superclass or mixin,
+ - mark the class as abstract, or
+ - provide a 'noSuchMethod' implementation.
+class RecordLinux extends RecordPlatform {
+      ^^^^^^^^^^^
+/C:/Users/harsh/AppData/Local/Pub/Cache/hosted/pub.dev/record_platform_i
+nterface-1.5.0/lib/src/record_platform_interface.dart:46:29: Context: 
+'RecordMethodChannelPlatformInterface.startStream' is defined here.
+  Future<Stream<Uint8List>> startStream(String recorderId, RecordConfig 
+config);
+                            ^^^^^^^^^^^
+/C:/Users/harsh/AppData/Local/Pub/Cache/hosted/pub.dev/record_linux-0.7.
+2/lib/record_linux.dart:36:16: Error: The method 
+'RecordLinux.hasPermission' has fewer named arguments than those of 
+overridden method 'RecordMethodChannelPlatformInterface.hasPermission'.
+  Future<bool> hasPermission(String recorderId) {
+               ^
+/C:/Users/harsh/AppData/Local/Pub/Cache/hosted/pub.dev/record_platform_i
+nterface-1.5.0/lib/src/record_platform_interface.dart:74:16: Context: 
+This is the overridden method ('hasPermission').
+  Future<bool> hasPermission(String recorderId, {bool request = true});
+               ^
+Target kernel_snapshot_program failed: Exception
+
+
+FAILURE: Build failed with an exception.
+
+* What went wrong:
+Execution failed for task ':app:compileFlutterBuildRelease'.
+> Process 'command 'C:\flutter\src\flutter\bin\flutter.bat'' finished 
+with non-zero exit value 1
+
+* Try:
+> Run with --stacktrace option to get the stack trace.
+> Run with --info or --debug option to get more log output.
+> Run with --scan to get full insights.
+> Get more help at https://help.gradle.org.
+
+BUILD FAILED in 34s
+Running Gradle task 'assembleRelease'...                           35.2s
+Gradle task assembleRelease failed with exit code 1

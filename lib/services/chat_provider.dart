@@ -15,16 +15,23 @@ import 'database_helper.dart';
 import 'discovery_service.dart';
 import '../models/session_state.dart';
 import 'messaging_service.dart';
-import 'package:file_picker/file_picker.dart';
-import 'package:open_filex/open_filex.dart';
-import 'package:share_plus/share_plus.dart';
+import 'reconnection_manager.dart';
+import 'connectivity_state_monitor.dart';
+import 'message_queue_manager.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:open_filex/open_filex.dart';
 import 'package:flutter_background_service/flutter_background_service.dart';
+import 'package:record/record.dart';
+import 'package:audioplayers/audioplayers.dart';
 import 'notification_service.dart';
+import '../utils/connectivity_logger.dart';
 
 class ChatProvider extends ChangeNotifier with WidgetsBindingObserver {
   final DiscoveryService discoveryService;
   final MessagingService messagingService;
+  final ReconnectionManager reconnectionManager;
+  final ConnectivityStateMonitor connectivityStateMonitor;
+  final MessageQueueManager messageQueueManager;
   final DatabaseHelper dbHelper = DatabaseHelper.instance;
 
   List<Device> discoveredDevices = [];
@@ -41,40 +48,58 @@ class ChatProvider extends ChangeNotifier with WidgetsBindingObserver {
   StreamSubscription? _messageSubscription;
   StreamSubscription? _typingSubscription;
   StreamSubscription? _qualitySubscription;
+  StreamSubscription? _stateMonitorSubscription;
+  
+  final _messageUpdatedController = StreamController<String?>.broadcast();
+  Stream<String?> get messageUpdatedStream => _messageUpdatedController.stream;
 
   // Local state for typing indicators: peerUuid -> isTyping
   final Map<String, bool> _typingPeers = {};
   Map<String, bool> get typingPeers => _typingPeers;
 
-  int get totalNodesInMesh => discoveryService.getConnectedDevices().length + 1; // Direct + Me
+  int _reachablePeersCount = 0;
+  int get reachablePeersCount => _reachablePeersCount;
   
-  /// Returns count of all unique reachable peers in the mesh (direct + indirect)
-  int get reachablePeersCount {
+  int _totalNodesInMesh = 1;
+  int get totalNodesInMesh => _totalNodesInMesh;
+
+  // PTT / Audio
+  final _audioRecorder = AudioRecorder();
+  final _audioPlayer = AudioPlayer();
+  bool _isRecording = false;
+  bool get isRecording => _isRecording;
+  String? _recordingPath;
+
+  void _updateMeshStats() {
     final Set<String> allUuids = {};
-    // Direct
-    for (var d in discoveryService.getConnectedDevices()) {
+    final connected = discoveryService.getConnectedDevices();
+    for (var d in connected) {
       if (d.uuid != null) allUuids.add(d.uuid!);
     }
-    // Indirect (from topology)
     for (var neighbors in messagingService.meshTopology.values) {
       allUuids.addAll(neighbors);
     }
-    return allUuids.length;
+    _reachablePeersCount = allUuids.length;
+    _totalNodesInMesh = connected.length + 1;
   }
 
-  /// Tracking for proximity alerts to avoid duplicate spam: peerUuid -> timestamp
   final Map<String, DateTime> _proximityAlertsSent = {};
 
-  /// Periodic timer that restarts discovery to catch returning peers.
   Timer? _rescanTimer;
   static const Duration _rescanInterval = Duration(seconds: 60);
   
   Timer? _batteryTimer;
   static const Duration _batteryInterval = Duration(seconds: 45);
 
+  Timer? _discoveryThrottleTimer;
+  Timer? _typingThrottleTimer;
+
   ChatProvider({
     required this.discoveryService,
     required this.messagingService,
+    required this.reconnectionManager,
+    required this.connectivityStateMonitor,
+    required this.messageQueueManager,
   }) {
     _init();
   }
@@ -82,6 +107,7 @@ class ChatProvider extends ChangeNotifier with WidgetsBindingObserver {
   Future<void> _init() async {
     WidgetsBinding.instance.addObserver(this);
     await _loadCurrentUser();
+
     await _loadSettings();
     await loadChats();
     await loadGroups();
@@ -90,39 +116,42 @@ class ChatProvider extends ChangeNotifier with WidgetsBindingObserver {
     _discoveredSubscription = discoveryService.discoveredDevices.listen((
       devices,
     ) async {
-      // Safety Filter: Ensure no duplicates by UUID and exclude self
-      final myUuid = currentUser?.uuid;
-      final uniqueDevices = <String, Device>{};
-      for (var d in devices) {
-        final key = d.uuid ?? d.deviceId;
-        if (key == myUuid || key == 'me') continue;
-        
-        // If we have a duplicate UUID, prefer the one with a more active state
-        if (!uniqueDevices.containsKey(key) || 
-            (d.state == SessionState.connected && uniqueDevices[key]!.state != SessionState.connected)) {
-          uniqueDevices[key] = d;
-        }
-      }
-      discoveredDevices = uniqueDevices.values.toList();
+      if (_discoveryThrottleTimer?.isActive ?? false) return;
       
-      // Proximity Alerts for Favorites
-      for (var device in discoveredDevices) {
-        if (device.uuid != null && device.state == SessionState.notConnected) {
-          // Check if this peer is a favorite in our chats
-          final chat = await dbHelper.getChatByPeerUuid(device.uuid!);
-          if (chat != null && chat.isFavorite) {
-            // Rate limit alerts to once every 5 minutes per peer
-            final lastAlert = _proximityAlertsSent[device.uuid!];
-            if (lastAlert == null || DateTime.now().difference(lastAlert).inMinutes > 5) {
-              _proximityAlertsSent[device.uuid!] = DateTime.now();
-              NotificationService.showProximityAlert(device.deviceName);
-              debugPrint('[ChatProvider] Proximity Alert triggered for ${device.deviceName}');
+      _discoveryThrottleTimer = Timer(const Duration(milliseconds: 500), () async {
+        // Safety Filter: Ensure absolute uniqueness by UUID/DeviceId and exclude self
+        final myUuid = currentUser?.uuid;
+        final uniqueDevicesMap = <String, Device>{};
+        
+        for (var d in devices) {
+          final id = d.uuid ?? d.deviceId;
+          if (id == myUuid || id == 'me' || id.isEmpty) continue;
+          
+          // If we already have this ID, decide which one to keep (prefer connected)
+          if (!uniqueDevicesMap.containsKey(id) || 
+              (d.state == SessionState.connected && uniqueDevicesMap[id]!.state != SessionState.connected)) {
+            uniqueDevicesMap[id] = d;
+          }
+        }
+        
+        discoveredDevices = uniqueDevicesMap.values.toList();
+        
+        // Proximity Alerts for Favorites
+        for (var device in discoveredDevices) {
+          if (device.uuid != null && device.state == SessionState.notConnected) {
+            final chat = await dbHelper.getChatByPeerUuid(device.uuid!);
+            if (chat != null && chat.isFavorite) {
+              final lastAlert = _proximityAlertsSent[device.uuid!];
+              if (lastAlert == null || DateTime.now().difference(lastAlert).inMinutes > 5) {
+                _proximityAlertsSent[device.uuid!] = DateTime.now();
+                NotificationService.showProximityAlert(device.deviceName);
+              }
             }
           }
         }
-      }
-      
-      notifyListeners();
+        _updateMeshStats();
+        notifyListeners();
+      });
     });
 
     _connectedSubscription = discoveryService.connectedDevice.listen((
@@ -130,42 +159,74 @@ class ChatProvider extends ChangeNotifier with WidgetsBindingObserver {
     ) async {
       connectedDevice = device;
       if (device.state == SessionState.connected) {
-        // Save to chats using UUID to ensure auto-reconnect works next time
         if (device.uuid != null) {
+          reconnectionManager.onConnectionRestored(device.uuid!);
+          connectivityStateMonitor.updateState(
+            uuid: device.uuid!,
+            deviceName: device.deviceName,
+            isConnected: true,
+          );
+
           await messagingService.saveConnectionToChat(
             device.uuid!,
             device.deviceName,
           );
-          // Sync profile photo
           await messagingService.sendProfileImage(device.uuid!);
-          // Process any queued messages for this device
+          await messageQueueManager.processQueueForPeer(device.uuid!);
           await messagingService.processPendingDelivery(device.uuid!);
-          // Refresh known devices so this peer is recognized on next scan
           await _refreshKnownDevices();
+          
+          ConnectivityLogger.event(
+            LogCategory.connection,
+            'Peer connected',
+            data: {'name': device.deviceName, 'uuid': device.uuid},
+          );
         }
       } else if (device.state == SessionState.notConnected) {
-        // A peer disconnected
         _batteryTimer?.cancel();
-        debugPrint('[ChatProvider] Peer disconnected: ${device.deviceName}. '
-            'Will attempt reconnect on next scan cycle.');
+        if (device.uuid != null) {
+          connectivityStateMonitor.updateState(
+            uuid: device.uuid!,
+            deviceName: device.deviceName,
+            isConnected: false,
+          );
+          reconnectionManager.scheduleReconnect(device);
+
+          ConnectivityLogger.event(
+            LogCategory.connection,
+            'Peer disconnected — reconnection scheduled',
+            data: {'name': device.deviceName, 'uuid': device.uuid},
+          );
+        }
         _ensureRescanTimer();
       }
+      _updateMeshStats();
       notifyListeners();
     });
 
-    _messageSubscription = messagingService.messageUpdated.listen((_) {
+    _messageSubscription = messagingService.messageUpdated.listen((peerUuid) {
       loadChats();
       loadGroups();
+      _messageUpdatedController.add(peerUuid);
     });
 
     _typingSubscription = messagingService.typingUpdated.listen((data) {
       final String uuid = data['uuid'];
       final bool isTyping = data['isTyping'];
       _typingPeers[uuid] = isTyping;
-      notifyListeners();
+
+      if (_typingThrottleTimer?.isActive ?? false) return;
+      _typingThrottleTimer = Timer(const Duration(milliseconds: 300), () {
+        notifyListeners();
+      });
     });
 
     _qualitySubscription = messagingService.connectionQualityUpdated.listen((_) {
+      notifyListeners();
+    });
+
+    // Subscribe to connectivity state monitor for UI updates
+    _stateMonitorSubscription = connectivityStateMonitor.stateChanges.listen((_) {
       notifyListeners();
     });
 
@@ -182,14 +243,18 @@ class ChatProvider extends ChangeNotifier with WidgetsBindingObserver {
     final service = FlutterBackgroundService();
     service.on('keep_alive_poke').listen((event) async {
       if (isDiscovering) {
-        // Only refresh radio if we have 0 connections to avoid dropping active sessions
         final connected = discoveryService.getConnectedDevices();
         if (connected.isEmpty) {
           debugPrint('[ChatProvider] Received background keep-alive poke. Refreshing radio (no active connections).');
           if (isBrowsing) await discoveryService.startBrowsing(forceRestart: true);
           if (isAdvertising) await discoveryService.startAdvertising(forceRestart: true);
         } else {
-          debugPrint('[ChatProvider] Received background keep-alive poke. Passive (active connections: ${connected.length}).');
+          debugPrint('[ChatProvider] Received background keep-alive poke. Actively updating ${connected.length} peers.');
+          // Perform a small data exchange to keep OS sockets hot and radio active
+          for (var device in connected) {
+            messagingService.sendBatteryUpdate(device.deviceId);
+            messagingService.sendMeshUpdate(device.deviceId);
+          }
         }
       }
     });
@@ -440,19 +505,15 @@ class ChatProvider extends ChangeNotifier with WidgetsBindingObserver {
     await discoveryService.disconnect(device);
   }
 
-  Future<void> sendMessage(String receiverUuid, String content) async {
+  Future<void> sendMessage(String receiverUuid, String content, {Duration? burnDuration}) async {
     String peerName = _resolvePeerNameByUuid(receiverUuid);
-    await messagingService.sendTextMessage(receiverUuid, peerName, content);
+    await messagingService.sendTextMessage(receiverUuid, peerName, content, burnDuration: burnDuration);
   }
 
   Future<void> retryMessage(String messageId) async {
     await messagingService.resendMessage(messageId);
   }
 
-  Future<void> sendImage(String receiverUuid, String imagePath) async {
-    String peerName = _resolvePeerNameByUuid(receiverUuid);
-    await messagingService.sendImageMessage(receiverUuid, peerName, imagePath);
-  }
 
   Future<void> sendTypingStatus(String receiverUuid, bool isTyping) async {
     await messagingService.sendTypingStatus(receiverUuid, isTyping);
@@ -477,6 +538,11 @@ class ChatProvider extends ChangeNotifier with WidgetsBindingObserver {
     await messagingService.sendGroupTextMessage(groupId, groupName, content);
   }
 
+  Future<void> addMembersToGroup(String groupId, List<String> memberUuids) async {
+    await messagingService.addMembersToGroup(groupId, memberUuids);
+    await loadGroups();
+  }
+
   Future<void> deleteGroup(String groupId) async {
     await dbHelper.deleteGroup(groupId);
     await loadGroups();
@@ -494,75 +560,14 @@ class ChatProvider extends ChangeNotifier with WidgetsBindingObserver {
     }
   }
 
-  Future<void> sendPdf(String receiverUuid) async {
-    FilePickerResult? result = await FilePicker.platform.pickFiles(
-      type: FileType.custom,
-      allowedExtensions: ['pdf'],
-    );
 
-    if (result != null && result.files.single.path != null) {
-      String peerName = _resolvePeerNameByUuid(receiverUuid);
-      await messagingService.sendPdfMessage(
-        receiverUuid,
-        peerName,
-        result.files.single.path!,
-      );
-    }
-  }
 
-  // --- Voice Notes ---
-
-  bool _isRecording = false;
-  bool get isRecording => _isRecording;
-
-  Future<void> startVoiceRecording() async {
-    _isRecording = true;
-    notifyListeners();
-    await messagingService.startAudioRecording();
-  }
-
-  Future<void> stopAndSendVoiceNote(String receiverUuid) async {
-    _isRecording = false;
-    notifyListeners();
-    final path = await messagingService.stopAudioRecording();
-    if (path != null) {
-      String peerName = _resolvePeerNameByUuid(receiverUuid);
-      await messagingService.sendVoiceNote(receiverUuid, peerName, path);
-    }
-  }
-
-  Future<void> playAudio(String path) async {
-    await messagingService.playAudioMsg(path);
-  }
-
-  Future<void> pauseAudio() async {
-    await messagingService.pauseAudio();
-  }
 
   Future<void> acceptFile(String messageId) async {
     await messagingService.acceptFile(messageId);
     await loadChats();
   }
 
-  Future<void> openFile(String path) async {
-    final file = File(path);
-    if (await file.exists()) {
-      await OpenFilex.open(path);
-    } else {
-      debugPrint('[ChatProvider] Cannot open file: File does not exist at $path');
-    }
-  }
-
-  Future<void> shareFile(String path, {String? fileName}) async {
-    final file = File(path);
-    if (await file.exists()) {
-      // ignore: deprecated_member_use
-      await Share.shareXFiles(
-        [XFile(path, name: fileName)],
-        text: 'Sharing file: ${fileName ?? 'document'}',
-      );
-    }
-  }
 
   Future<List<Message>> getMessages(String peerUuid) async {
     if (currentUser == null) return [];
@@ -608,6 +613,15 @@ class ChatProvider extends ChangeNotifier with WidgetsBindingObserver {
     }
   }
 
+  Future<void> openFile(String path) async {
+    final file = File(path);
+    if (await file.exists()) {
+      await OpenFilex.open(path);
+    } else {
+      debugPrint('[ChatProvider] Cannot open file: File does not exist at $path');
+    }
+  }
+
   /// Returns true if the peer is currently connected.
   bool isPeerConnected(String peerUuid) {
     try {
@@ -645,8 +659,34 @@ class ChatProvider extends ChangeNotifier with WidgetsBindingObserver {
     }
   }
 
+  Future<Map<String, dynamic>> getSecurityMetadata(String peerUuid) async {
+    final localFingerprint = await messagingService.signalService.getLocalFingerprint();
+    final remoteFingerprint = await messagingService.signalService.getRemoteFingerprint(peerUuid);
+    final registrationId = messagingService.signalService.localRegistrationId;
+    
+    final peer = await dbHelper.getPeer(peerUuid);
+    
+    return {
+      'localFingerprint': localFingerprint,
+      'remoteFingerprint': remoteFingerprint,
+      'registrationId': registrationId,
+      'isVerified': peer?.isVerified ?? false,
+    };
+  }
+
+  Future<void> verifyPeer(String peerUuid, bool isVerified) async {
+    final peer = await dbHelper.getPeer(peerUuid);
+    if (peer != null) {
+      await dbHelper.insertPeer(peer.copyWith(isVerified: isVerified));
+      notifyListeners();
+    }
+  }
+
   @override
   void dispose() {
+    _audioRecorder.dispose();
+    _audioPlayer.dispose();
+    _messageUpdatedController.close();
     WidgetsBinding.instance.removeObserver(this);
     _rescanTimer?.cancel();
     _discoveredSubscription?.cancel();
@@ -654,7 +694,60 @@ class ChatProvider extends ChangeNotifier with WidgetsBindingObserver {
     _messageSubscription?.cancel();
     _typingSubscription?.cancel();
     _qualitySubscription?.cancel();
+    _stateMonitorSubscription?.cancel();
     _batteryTimer?.cancel();
+    _discoveryThrottleTimer?.cancel();
+    _typingThrottleTimer?.cancel();
     super.dispose();
+  }
+  // --- PTT Methods ---
+
+  Future<void> startRecording() async {
+    try {
+      if (await _audioRecorder.hasPermission()) {
+        final directory = await getApplicationDocumentsDirectory();
+        final String fileName = 'ptt_temp_${DateTime.now().millisecondsSinceEpoch}.m4a';
+        _recordingPath = p.join(directory.path, 'PTT', fileName);
+        
+        final file = File(_recordingPath!);
+        if (!await file.parent.exists()) {
+          await file.parent.create(recursive: true);
+        }
+
+        const config = RecordConfig(); 
+        await _audioRecorder.start(config, path: _recordingPath!);
+        _isRecording = true;
+        notifyListeners();
+      }
+    } catch (e) {
+      debugPrint('[PTT] Error starting recording: $e');
+    }
+  }
+
+  Future<void> stopRecording(String receiverUuid, {Duration? burnDuration}) async {
+    try {
+      final path = await _audioRecorder.stop();
+      _isRecording = false;
+      notifyListeners();
+
+      if (path != null && _recordingPath != null) {
+        String peerName = _resolvePeerNameByUuid(receiverUuid);
+        await messagingService.sendAudioMessage(receiverUuid, peerName, path, burnDuration: burnDuration);
+      }
+    } catch (e) {
+      debugPrint('[PTT] Error stopping recording: $e');
+      _isRecording = false;
+      notifyListeners();
+    }
+  }
+
+  Future<void> playAudio(String filePath) async {
+    try {
+      if (File(filePath).existsSync()) {
+        await _audioPlayer.play(DeviceFileSource(filePath));
+      }
+    } catch (e) {
+      debugPrint('[PTT] Error playing audio: $e');
+    }
   }
 }

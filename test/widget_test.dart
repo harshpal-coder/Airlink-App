@@ -1,30 +1,45 @@
-// This is a basic Flutter widget test.
-//
-// To perform an interaction with a widget in your test, use the WidgetTester
-// utility in the flutter_test package. For example, you can send tap and scroll
-// gestures. You can also use WidgetTester to find child widgets in the widget
-// tree, read text, and verify that the values of widget properties are correct.
-
-import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-
+import 'package:app/services/discovery_service.dart';
+import 'package:app/services/heartbeat_manager.dart';
+import 'package:app/services/reconnection_manager.dart';
+import 'package:app/services/connectivity_state_monitor.dart';
+import 'package:app/services/message_queue_manager.dart';
+import 'package:app/services/messaging_service.dart';
 import 'package:app/main.dart';
+import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 void main() {
-  testWidgets('Counter increments smoke test', (WidgetTester tester) async {
-    // Build our app and trigger a frame.
-    await tester.pumpWidget(const MyApp());
+  sqfliteFfiInit();
+  databaseFactory = databaseFactoryFfi;
 
-    // Verify that our counter starts at 0.
-    expect(find.text('0'), findsOneWidget);
-    expect(find.text('1'), findsNothing);
+  testWidgets('App initializes without crash', (WidgetTester tester) async {
+    final discovery = DiscoveryService();
+    final heartbeat = HeartbeatManager(discoveryService: discovery);
+    final reconnection = ReconnectionManager(discoveryService: discovery);
+    final stateMonitor = ConnectivityStateMonitor();
+    final messageQueue = MessageQueueManager(discoveryService: discovery);
+    final messaging = MessagingService(
+      discoveryService: discovery,
+      heartbeatManager: heartbeat,
+      messageQueueManager: messageQueue,
+    );
 
-    // Tap the '+' icon and trigger a frame.
-    await tester.tap(find.byIcon(Icons.add));
-    await tester.pump();
+    await tester.pumpWidget(MyApp(
+      discoveryService: discovery,
+      messagingService: messaging,
+      reconnectionManager: reconnection,
+      connectivityStateMonitor: stateMonitor,
+      messageQueueManager: messageQueue,
+    ));
 
-    // Verify that our counter has incremented.
-    expect(find.text('0'), findsNothing);
-    expect(find.text('1'), findsOneWidget);
+    // Just verify it builds without errors
+    expect(find.byType(MyApp), findsOneWidget);
+
+    heartbeat.dispose();
+    reconnection.dispose();
+    messageQueue.dispose();
+    stateMonitor.dispose();
+    messaging.dispose();
+    discovery.dispose();
   });
 }

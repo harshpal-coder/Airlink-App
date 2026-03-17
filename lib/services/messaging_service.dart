@@ -6,12 +6,12 @@ import 'package:uuid/uuid.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as p;
 import 'package:flutter/foundation.dart';
-import 'package:gal/gal.dart';
 import 'package:battery_plus/battery_plus.dart';
-import 'package:record/record.dart';
 import 'package:audioplayers/audioplayers.dart';
 
 import 'discovery_service.dart';
+import 'heartbeat_manager.dart';
+import 'message_queue_manager.dart';
 import 'database_helper.dart';
 import 'notification_service.dart';
 import '../models/session_state.dart';
@@ -23,15 +23,17 @@ import '../models/group_model.dart';
 import '../encryption/signal_protocol_service.dart';
 
 class MessagingService {
-  final DiscoveryService discoveryService; // 
+  final DiscoveryService discoveryService;
+  final HeartbeatManager heartbeatManager;
+  final MessageQueueManager messageQueueManager;
   final DatabaseHelper dbHelper = DatabaseHelper.instance;
   final SignalProtocolService _signalService = SignalProtocolService();
+  SignalProtocolService get signalService => _signalService;
   final Battery _battery = Battery();
-  final AudioRecorder _recorder = AudioRecorder();
-  final AudioPlayer _player = AudioPlayer();
+  late final AudioPlayer _player = AudioPlayer();
 
-  final _messageUpdatedController = StreamController<void>.broadcast();
-  Stream<void> get messageUpdated => _messageUpdatedController.stream;
+  final _messageUpdatedController = StreamController<String?>.broadcast();
+  Stream<String?> get messageUpdated => _messageUpdatedController.stream;
 
   // Cache to prevent re-relaying the same message ID (prevents infinite loops in mesh)
   final Set<String> _processedMessageIds = {};
@@ -44,10 +46,50 @@ class MessagingService {
   final Map<String, List<String>> _meshTopology = {};
   Map<String, List<String>> get meshTopology => _meshTopology;
 
-  // Track incoming files: payloadId -> temporary local path
-  final Map<int, String> _incomingFilePaths = {};
+  // Track link and node metadata for Dijkstra: uuid -> {rssi, battery, isBackbone, lastUpdate}
+  final Map<String, Map<String, dynamic>> _meshNodeMetadata = {};
+  Map<String, Map<String, dynamic>> get meshNodeMetadata => _meshNodeMetadata;
+  
+  // Opportunistic buffer: targetUuid -> List of pending message payloads
+  final Map<String, List<Map<String, dynamic>>> _opportunisticBuffer = {};
+
+  final Map<String, List<String>> _activePaths = {};
+  Map<String, List<String>> get activePaths => _activePaths;
+
 
   // SOS Alerts stream
+  void _pruneStaleTopology() {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final staleLimit = 1000 * 60 * 15; // 15 minutes
+
+    _meshNodeMetadata.removeWhere((uuid, meta) {
+      final lastUpdate = meta['lastUpdate'] as int? ?? 0;
+      if (now - lastUpdate > staleLimit) {
+        _meshTopology.remove(uuid);
+        return true;
+      }
+      return false;
+    });
+  }
+
+  void _flushOpportunisticBuffer() async {
+    if (_opportunisticBuffer.isEmpty) return;
+
+    final targets = List<String>.from(_opportunisticBuffer.keys);
+    for (var targetUuid in targets) {
+      final path = await _findNextHop(targetUuid);
+      if (path != null) {
+        final messages = _opportunisticBuffer.remove(targetUuid);
+        if (messages != null) {
+          debugPrint('[Opportunistic] Path found to $targetUuid. Flushing ${messages.length} messages.');
+          for (var payload in messages) {
+            await _relayMessage(targetUuid, payload);
+          }
+        }
+      }
+    }
+  }
+
   final _sosAlertController = StreamController<Map<String, dynamic>>.broadcast();
   Stream<Map<String, dynamic>> get sosAlerts => _sosAlertController.stream;
 
@@ -58,28 +100,63 @@ class MessagingService {
   Stream<Map<String, double>> get connectionQualityUpdated => _connectionQualityController.stream;
 
   StreamSubscription? _dataSubscription;
-
-  // Heartbeat tracking: peerUuid -> missed pings count
-  final Map<String, int> _heartbeatMisses = {};
-  Timer? _heartbeatTimer;
+  StreamSubscription? _payloadProgressSubscription;
+  StreamSubscription? _batterySubscription;
+  Timer? _cleanupTimer;
 
   // Store-and-Forward Relay Buffer: targetUuid -> List of messages
   final Map<String, List<Map<String, dynamic>>> _relayBuffer = {};
 
   bool _isPluggedIn = false;
 
-  MessagingService({required this.discoveryService}) {
+  MessagingService({
+    required this.discoveryService,
+    required this.heartbeatManager,
+    required this.messageQueueManager,
+  }) {
     _dataSubscription = discoveryService.dataReceived.listen(
       _handleIncomingData,
     );
-    discoveryService.payloadProgress.listen(_handlePayloadProgress);
-    discoveryService.fileReceived.listen(_handleIncomingFile);
+    _payloadProgressSubscription = discoveryService.payloadProgress.listen(_handlePayloadProgress);
     _initBatteryMonitoring();
-    _startHeartbeatTimer();
+
+    // Start heartbeat monitoring via the dedicated manager
+    heartbeatManager.startMonitoring();
+
+
+    // Register resend callback for the message queue manager
+    messageQueueManager.onResendMessage = resendMessage;
+
+    _startCleanupTimer();
+  }
+
+  void _startCleanupTimer() {
+    _cleanupTimer?.cancel();
+    _cleanupTimer = Timer.periodic(const Duration(seconds: 10), (timer) async {
+      final deletedCount = await dbHelper.deleteExpiredMessages();
+      if (deletedCount > 0) {
+        debugPrint('[Cleanup] Burned $deletedCount expired messages.');
+        _messageUpdatedController.add(null);
+      }
+    });
+  }
+
+  void dispose() {
+    _dataSubscription?.cancel();
+    _payloadProgressSubscription?.cancel();
+    _batterySubscription?.cancel();
+    _messageUpdatedController.close();
+    _sosAlertController.close();
+    _typingController.close();
+    _connectionQualityController.close();
+    heartbeatManager.stopMonitoring();
+    _cleanupTimer?.cancel();
+    _player.dispose();
+    debugPrint('[MessagingService] Disposed.');
   }
 
   void _initBatteryMonitoring() {
-    _battery.onBatteryStateChanged.listen((state) {
+    _batterySubscription = _battery.onBatteryStateChanged.listen((state) {
       _isPluggedIn = (state == BatteryState.charging || state == BatteryState.full);
       _broadcastBackboneStatus();
     });
@@ -102,185 +179,28 @@ class MessagingService {
     return level > 80 || _isPluggedIn;
   }
 
-  void _startHeartbeatTimer() {
-    _heartbeatTimer?.cancel();
-    _heartbeatTimer = Timer.periodic(const Duration(seconds: 30), (timer) {
-      _checkPeerHealth();
-    });
-  }
+  // Ping/Pong now handled by HeartbeatManager
 
-  void _checkPeerHealth() async {
-    final connectedPeers = discoveryService.getConnectedDevices();
-    for (final peer in connectedPeers) {
-      if (peer.uuid == null) continue;
-      
-      final misses = _heartbeatMisses[peer.uuid] ?? 0;
-      if (misses >= 3) {
-        debugPrint('[Heartbeat] Ghost connection detected for ${peer.deviceName} (${peer.uuid}). Force disconnecting...');
-        _heartbeatMisses.remove(peer.uuid);
-        discoveryService.disconnect(peer);
-        continue;
-      }
 
-      // Send Ping
-      _heartbeatMisses[peer.uuid!] = misses + 1;
-      _sendPing(peer.deviceId, peer.uuid!);
-    }
-  }
 
-  Future<void> _sendPing(String deviceId, String targetUuid) async {
-    try {
-      final now = DateTime.now().millisecondsSinceEpoch;
-      final payload = json.encode({
-        'type': 'ping',
-        'timestamp': now,
-        'senderUuid': (await dbHelper.getUser('me'))?.uuid ?? 'me',
-      });
-      await discoveryService.sendMessageToEndpoint(deviceId, payload);
-    } catch (e) {
-      debugPrint('[Heartbeat] Error sending ping to $targetUuid: $e');
-    }
-  }
-
-  Future<void> _sendPong(String deviceId, String targetUuid, int? originalTimestamp) async {
-    try {
-      final payload = json.encode({
-        'type': 'pong',
-        'senderUuid': (await dbHelper.getUser('me'))?.uuid ?? 'me',
-        'pingTimestamp': originalTimestamp,
-      });
-      await discoveryService.sendMessageToEndpoint(deviceId, payload);
-    } catch (e) {
-      debugPrint('[Heartbeat] Error sending pong to $targetUuid: $e');
-    }
-  }
-
-  void _handleIncomingFile(Map<String, dynamic> data) async {
-    final String senderId = data['senderId'];
-    final String? filePath = data['filePath'];
-    final int payloadId = data['payloadId'];
-
-    debugPrint('File payload received from $senderId (ID: $payloadId, Path: $filePath)');
-    
-    if (filePath != null) {
-      _incomingFilePaths[payloadId] = filePath;
-      
-      // Check if we already have a message record for this payloadId
-      final message = await dbHelper.getMessageByPayloadId(payloadId);
-      if (message != null) {
-        // Use the filename from metadata (stored in content) if it's not already a path
-        String fileName = p.basename(filePath);
-        if (!message.content.contains(Platform.pathSeparator) && !message.content.contains('/')) {
-          fileName = message.content;
-        }
-        
-        // Move to permanent location
-        final permanentPath = await _moveToPermanentLocation(filePath, fileName);
-        await dbHelper.updateMessageContent(message.id, permanentPath);
-        _messageUpdatedController.sink.add(null);
-      }
-    }
-  }
-
-  Future<String> _moveToPermanentLocation(String tempPath, String fileName) async {
-    try {
-      final directory = await getApplicationDocumentsDirectory();
-      final mediaDir = Directory(p.join(directory.path, 'received_media'));
-      if (!await mediaDir.exists()) await mediaDir.create(recursive: true);
-      
-      final permanentFile = File(p.join(mediaDir.path, fileName));
-      final tempFile = File(tempPath);
-      
-      if (await tempFile.exists()) {
-        await tempFile.copy(permanentFile.path);
-        debugPrint('[MessagingService] File moved to permanent location: ${permanentFile.path}');
-        return permanentFile.path;
-      }
-    } catch (e) {
-      debugPrint('[MessagingService] Error moving file: $e');
-    }
-    return tempPath;
-  }
-
-  void _estimateSignalQuality(String deviceId, int rtt) {
-    // Map RTT to synthetic RSSI
-    // Very fast (<100ms): Excellent (-40 to -50)
-    // Fast (100-300ms): Good (-50 to -60)
-    // Medium (300-800ms): Fair (-60 to -75)
-    // Slow (>800ms): Weak (-75 to -90)
-    
-    double estimatedRssi;
-    if (rtt < 100) {
-      estimatedRssi = -45.0;
-    } else if (rtt < 300) {
-      estimatedRssi = -55.0;
-    } else if (rtt < 800) {
-      estimatedRssi = -70.0;
-    } else {
-      estimatedRssi = -85.0;
-    }
-    
-    discoveryService.updateDeviceRssi(deviceId, estimatedRssi);
-    _connectionQualityController.add({deviceId: estimatedRssi});
-    debugPrint('[SignalHealth] Estimated RSSI for $deviceId: $estimatedRssi dBm (RTT: ${rtt}ms)');
-  }
+  // Signal quality estimation now handled by HeartbeatManager
 
   void _handlePayloadProgress(PayloadProgress update) async {
-    String? messageId = _payloadToMessageId[update.payloadId];
-    
-    if (messageId != null) {
-      await dbHelper.updateMessageProgress(messageId, update.progress);
-      
-      if (update.status == PayloadStatus.SUCCESS) {
-        // Update path if we have it
-        if (_incomingFilePaths.containsKey(update.payloadId)) {
-          final tempPath = _incomingFilePaths[update.payloadId]!;
-          final message = await dbHelper.getMessageById(messageId);
-          String fileName = p.basename(tempPath);
-          if (message != null && !message.content.contains(Platform.pathSeparator) && !message.content.contains('/')) {
-            fileName = message.content;
-          }
-          
-          final permanentPath = await _moveToPermanentLocation(tempPath, fileName);
-          await dbHelper.updateMessageContent(messageId, permanentPath);
-          _incomingFilePaths.remove(update.payloadId);
-        }
-      } else if (update.status == PayloadStatus.FAILURE) {
-        // Handled below mainly
-      }
-      _messageUpdatedController.sink.add(null);
-      return;
-    }
-
     final message = await dbHelper.getMessageByPayloadId(update.payloadId);
     if (message != null) {
       await dbHelper.updateMessageProgress(message.id, update.progress);
       
       if (update.status == PayloadStatus.SUCCESS) {
-        String finalContent = message.content;
-        if (_incomingFilePaths.containsKey(update.payloadId)) {
-          final tempPath = _incomingFilePaths[update.payloadId]!;
-          String fileName = p.basename(tempPath);
-          if (!message.content.contains(Platform.pathSeparator) && !message.content.contains('/')) {
-            fileName = message.content;
-          }
-          
-          final permanentPath = await _moveToPermanentLocation(tempPath, fileName);
-          finalContent = permanentPath;
-          _incomingFilePaths.remove(update.payloadId);
-        }
-
         await dbHelper.insertMessage(message.copyWith(
           status: MessageStatus.delivered,
           progress: 1.0,
-          content: finalContent,
         ));
       } else if (update.status == PayloadStatus.FAILURE) {
         await dbHelper.insertMessage(message.copyWith(
           status: MessageStatus.failed,
         ));
       }
-      _messageUpdatedController.sink.add(null);
+      _messageUpdatedController.sink.add(message.senderUuid);
     }
   }
 
@@ -309,7 +229,7 @@ class MessagingService {
           await File(filePath).writeAsBytes(base64Decode(profileBase64));
           await _updateChatRecord(originalSenderUuid, null, null, 0, peerName: originalSenderName, peerProfileImage: filePath);
           debugPrint('[MessagingService] Synced profile image for $originalSenderUuid');
-          _messageUpdatedController.add(null);
+          _messageUpdatedController.add(originalSenderUuid);
           return;
         }
       }
@@ -331,42 +251,57 @@ class MessagingService {
       // Handle mesh topology update
       if (type == 'mesh_update') {
         final List<dynamic>? neighbors = payload['neighbors'] as List<dynamic>?;
+        final Map<String, dynamic>? nodeInfo = payload['nodeInfo'] as Map<String, dynamic>?;
+
         if (originalSenderUuid != null && neighbors != null) {
           _meshTopology[originalSenderUuid] = neighbors.cast<String>();
+          
+          // Update node metadata if provided
+          if (nodeInfo != null) {
+            _meshNodeMetadata[originalSenderUuid] = {
+              ...nodeInfo,
+              'lastUpdate': DateTime.now().millisecondsSinceEpoch,
+            };
+          }
           
           // EXTEND DISCOVERY: Add these neighbors as mesh devices in DiscoveryService
           for (var neighborUuid in neighbors) {
             if (neighborUuid == myUuid || neighborUuid == 'me') continue;
-            // We only know UID, but we can try to find their name if they were 
-            // previously seen or just use "Mesh Peer"
             final peer = await dbHelper.getPeer(neighborUuid);
             final displayName = peer?.deviceName ?? 'Mesh Peer';
             discoveryService.addMeshDevice(neighborUuid, displayName, senderId);
           }
           
-          _messageUpdatedController.add(null);
+          _pruneStaleTopology();
+          _flushOpportunisticBuffer();
+          _messageUpdatedController.add(originalSenderUuid);
         }
         return;
       }
 
-      // Handle Heartbeats
+      // Handle Mesh ACKs
+      if (type == 'mesh_ack') {
+        final String? ackMessageId = payload['ackMessageId'];
+        if (ackMessageId != null) {
+          debugPrint('[MeshACK] Received ACK for message $ackMessageId from $originalSenderUuid');
+          await dbHelper.updateMessageStatus(ackMessageId, MessageStatus.delivered);
+          _messageUpdatedController.add(originalSenderUuid);
+        }
+        return;
+      }
+
+    // Handle Heartbeats — delegated to HeartbeatManager
       if (type == 'ping') {
         if (originalSenderUuid != null) {
           final int? pingTimestamp = payload['timestamp'] as int?;
-          _sendPong(senderId, originalSenderUuid, pingTimestamp);
+          heartbeatManager.sendPong(senderId, originalSenderUuid, pingTimestamp);
         }
         return;
       }
       if (type == 'pong') {
         if (originalSenderUuid != null) {
-          _heartbeatMisses[originalSenderUuid] = 0; // Reset miss count
-          
-          // Calculate RTT for signal health estimation
           final int? pingTimestamp = payload['pingTimestamp'] as int?;
-          if (pingTimestamp != null) {
-            final rtt = DateTime.now().millisecondsSinceEpoch - pingTimestamp;
-            _estimateSignalQuality(senderId, rtt);
-          }
+          heartbeatManager.handlePong(originalSenderUuid, senderId, pingTimestamp);
         }
         return;
       }
@@ -407,6 +342,13 @@ class MessagingService {
         );
       }
 
+      // Handle burn duration/expiration
+      DateTime? expiresAt;
+      if (payload['burnDuration'] != null) {
+        final seconds = payload['burnDuration'] as int;
+        expiresAt = DateTime.now().add(Duration(seconds: seconds));
+      }
+
       if (type == 'text') {
         final String content = decryptedContent ?? (payload['content'] as String? ?? '');
         await _processIncomingText(
@@ -415,23 +357,8 @@ class MessagingService {
           senderName: originalSenderName,
           senderUuid: originalSenderUuid,
           incomingPayloadId: incomingPayloadId,
+          expiresAt: expiresAt,
         );
-      } else if (type == 'file_metadata') {
-        final int? filePayloadId = payload['filePayloadId'] as int?;
-        final String? fileName = payload['fileName'] as String?;
-        final String? subType = payload['subType'] as String?; // 'image', 'pdf', 'audio'
-        
-        if (filePayloadId != null) {
-          await _processIncomingFileMetadata(
-            senderId,
-            filePayloadId,
-            fileName ?? 'received_file',
-            subType ?? 'file',
-            senderName: originalSenderName,
-            senderUuid: originalSenderUuid,
-            incomingPayloadId: incomingPayloadId,
-          );
-        }
       } else if (type == 'typing') {
         final bool isTyping = payload['isTyping'] == true;
         // Broadcast this locally to UI
@@ -443,30 +370,6 @@ class MessagingService {
         await _processIncomingText(
           senderId,
           "[SHOUT] $content",
-          senderName: originalSenderName,
-          senderUuid: originalSenderUuid,
-          incomingPayloadId: incomingPayloadId,
-        );
-      } else if (type == 'image') {
-        // Fallback for older versions using base64
-        final String base64Content = payload['content'] as String;
-        final String fileName = payload['fileName'] ?? 'image_${DateTime.now().millisecondsSinceEpoch}.jpg';
-        await _processIncomingImage(
-          senderId,
-          base64Content,
-          fileName,
-          senderName: originalSenderName,
-          senderUuid: originalSenderUuid,
-          incomingPayloadId: incomingPayloadId,
-        );
-      } else if (type == 'pdf') {
-        // Fallback for older versions using base64
-        final String base64Content = payload['content'] as String;
-        final String fileName = payload['fileName'] ?? 'document_${DateTime.now().millisecondsSinceEpoch}.pdf';
-        await _processIncomingPdf(
-          senderId,
-          base64Content,
-          fileName,
           senderName: originalSenderName,
           senderUuid: originalSenderUuid,
           incomingPayloadId: incomingPayloadId,
@@ -528,6 +431,31 @@ class MessagingService {
           // Re-relay for mesh propagation (flooding)
           _relayMessage('broadcast', payload, excludeEndpointId: senderId);
         }
+      } else if (type == 'audio') {
+        final String base64Content = payload['content'] as String;
+        await _processIncomingAudio(
+          senderId,
+          base64Content,
+          senderName: originalSenderName,
+          senderUuid: originalSenderUuid,
+          incomingPayloadId: incomingPayloadId,
+          expiresAt: expiresAt,
+        );
+        
+        // Relaying audio for mesh
+        _relayMessage(targetUuid ?? 'broadcast', payload, excludeEndpointId: senderId);
+      } else if (type == 'group_update') {
+        final String? groupId = payload['groupId'];
+        final List<dynamic>? memberUuids = payload['members'];
+        if (groupId != null && memberUuids != null) {
+          final group = await dbHelper.getGroupById(groupId);
+          if (group != null) {
+            final updatedGroup = group.copyWith(members: memberUuids.cast<String>());
+            await dbHelper.insertGroup(updatedGroup);
+            _messageUpdatedController.add(null);
+            debugPrint('[MessagingService] Updated member list for group $groupId');
+          }
+        }
       } else if (type == 'profile_sync') {
         final String base64Content = payload['content'] as String;
         final String extension = payload['extension'] ?? '.jpg';
@@ -539,8 +467,14 @@ class MessagingService {
           senderUuid: originalSenderUuid,
         );
       }
+
+      // Send Mesh ACK if this message was for me and had a messageId
+      if (targetUuid == myUuid && messageId != null && type != 'mesh_ack' && type != 'typing' && type != 'ping' && type != 'pong' && type != 'battery_update' && type != 'mesh_update') {
+        _sendMeshAck(originalSenderUuid ?? senderId, messageId);
+      }
     } catch (e) {
       debugPrint('[MessagingService] Error handling data: $e');
+      // Fallback for non-json or malformed data
       await _processIncomingText(senderId, rawPayload);
     }
   }
@@ -570,15 +504,86 @@ class MessagingService {
           .whereType<String>()
           .toList();
 
+      final level = await _battery.batteryLevel;
+      final status = await _calculateBackboneStatus();
+
       final String payload = json.encode({
         'type': 'mesh_update',
         'neighbors': neighborUuids,
         'senderUuid': me?.uuid ?? 'me',
+        'nodeInfo': {
+          'batteryLevel': level,
+          'isBackbone': status,
+          'isPluggedIn': _isPluggedIn,
+        }
       });
       await discoveryService.sendMessageToEndpoint(endpointId, payload);
     } catch (e) {
       debugPrint('[MessagingService] Error sending mesh update: $e');
     }
+  }
+
+  Future<void> _sendMeshAck(String targetUuid, String ackMessageId) async {
+    try {
+      final User? me = await dbHelper.getUser('me');
+      final payload = {
+        'type': 'mesh_ack',
+        'ackMessageId': ackMessageId,
+        'senderUuid': me?.uuid ?? 'me',
+        'targetUuid': targetUuid,
+        'timestamp': DateTime.now().toIso8601String(),
+        'hopCount': 0,
+      };
+      debugPrint('[MeshACK] Sending ACK for $ackMessageId to $targetUuid');
+      await _relayMessage(targetUuid, payload);
+    } catch (e) {
+      debugPrint('[MeshACK] Error sending ACK: $e');
+    }
+  }
+
+  /// Finds the next hop towards [targetUuid] using Dijkstra's algorithm.
+  /// Considers link costs based on RSSI and node power status.
+  Future<String?> _findNextHop(String targetUuid) async {
+    final connected = discoveryService.getConnectedDevices();
+    
+    // 1. Direct connection is always best - check synchronously for performance
+    for (var device in connected) {
+      if (device.uuid == targetUuid) return device.deviceId;
+    }
+
+    // 2. Dijkstra for weighted path - Offload to background Isolate
+    final User? me = await dbHelper.getUser('me');
+    final String myUuid = me?.uuid ?? 'me';
+    
+    // Prepare data for the isolate
+    final params = DijkstraParams(
+      myUuid: myUuid,
+      targetUuid: targetUuid,
+      meshTopology: _meshTopology,
+      meshNodeMetadata: _meshNodeMetadata,
+      connectedDevices: connected.map((d) => {
+        'uuid': d.uuid,
+        'deviceId': d.deviceId,
+        'rssi': d.rssi,
+        'isBackbone': d.isBackbone,
+        'batteryLevel': d.batteryLevel,
+      }).toList(),
+    );
+
+    try {
+      final result = await compute(_dijkstraIsolate, params);
+      
+      if (result != null) {
+        _activePaths[targetUuid] = result.path;
+        debugPrint('[Dijkstra Isolate] Optimal path to $targetUuid: ${result.path} (Cost: ${result.cost})');
+        return result.nextHopDeviceId;
+      }
+    } catch (e) {
+      debugPrint('[Dijkstra Isolate] Error: $e');
+    }
+
+    _activePaths.remove(targetUuid);
+    return null;
   }
 
   Future<void> _relayMessage(String targetUuid, Map<String, dynamic> payload, {String? excludeEndpointId}) async {
@@ -588,47 +593,41 @@ class MessagingService {
 
     final String updatedPayload = json.encode(payload);
     
-    // If it's a broadcast to everyone (like a group message), skip the direct path logic
-    if (targetUuid == 'broadcast') {
-      debugPrint('[SmartRelay] Broadcasting payload via flooding (hops: $hops)');
-    } else {
-      // 1. Direct connection check
-      final directDevice = discoveryService.getDeviceByUuid(targetUuid);
-      if (directDevice != null && directDevice.state == SessionState.connected) {
-        if (directDevice.deviceId == excludeEndpointId) return;
-        debugPrint('[SmartRelay] Direct path found for $targetUuid via ${directDevice.deviceId}');
-        await discoveryService.sendMessageToEndpoint(directDevice.deviceId, updatedPayload);
-        return;
-      }
-
-      // 2. Smart Path check (is target a neighbor of any of my neighbors?)
-      String? viaEndpoint;
-      int highestBattery = -1;
-
-      for (var entry in _meshTopology.entries) {
-        if (entry.value.contains(targetUuid)) {
-          final neighborDevice = discoveryService.getDeviceByUuid(entry.key);
-          if (neighborDevice != null && neighborDevice.state == SessionState.connected) {
-            // Prioritize neighbors with better battery
-            int battery = neighborDevice.batteryLevel;
-            if (battery > highestBattery) {
-              highestBattery = battery;
-              viaEndpoint = neighborDevice.deviceId;
-            }
-          }
+    // 1. High-Priority Flooding (ignore Dijkstra for critical alerts)
+    if (payload['priority'] == 1) {
+      debugPrint('[MeshRelay] High-Priority message. Flooding to all neighbors.');
+      final neighbors = discoveryService.getConnectedDevices();
+      for (var peer in neighbors) {
+        if (peer.deviceId != excludeEndpointId) {
+          await discoveryService.sendMessageToEndpoint(peer.deviceId, updatedPayload);
         }
       }
-
-      if (viaEndpoint != null && highestBattery > 15) {
-        debugPrint('[SmartRelay] Smart path found for $targetUuid via neighbor $viaEndpoint (Battery: $highestBattery%)');
-        await discoveryService.sendMessageToEndpoint(viaEndpoint, updatedPayload);
-        return;
-      }
-
-      debugPrint('[SmartRelay] No smart path for $targetUuid. Flooding to all neighbors.');
+      return;
     }
 
-    // 3. Fallback: Flooding
+    // 2. Dijkstra pathfinding for unicast messages
+    if (targetUuid != 'broadcast') {
+      final String? nextHopEndpointId = await _findNextHop(targetUuid);
+      
+      if (nextHopEndpointId != null && nextHopEndpointId != excludeEndpointId) {
+        debugPrint('[MeshRelay] Path found for $targetUuid. Next hop: $nextHopEndpointId (hops: $hops)');
+        await discoveryService.sendMessageToEndpoint(nextHopEndpointId, updatedPayload);
+        return;
+      }
+      
+      // 3. Buffer for later if no path (Opportunistic Buffering)
+      if (hops == 1) { // Only buffer if it's the first hop and no path found
+        debugPrint('[MeshRelay] No path for $targetUuid. Buffering message.');
+        _opportunisticBuffer.putIfAbsent(targetUuid, () => []).add(payload);
+        return;
+      }
+      
+      debugPrint('[MeshRelay] No path for $targetUuid in topology. Flooding to direct neighbors.');
+    } else {
+      debugPrint('[MeshRelay] Broadcasting payload via flooding (hops: $hops)');
+    }
+
+    // 4. Fallback: Flooding (for broadcast or if Dijkstra failed/no path)
     final neighbors = discoveryService.getConnectedDevices();
     
     // Sort neighbors: Backbones first, then highest battery
@@ -661,18 +660,17 @@ class MessagingService {
     final User? me = await dbHelper.getUser('me');
     final messageId = const Uuid().v4();
     
-    final payloadObj = {
+    final payload = {
       'type': 'sos',
       'content': content,
-      'senderName': me?.deviceName ?? 'Unknown User',
+      'senderName': me?.deviceName ?? 'User',
       'senderUuid': me?.uuid ?? '',
       'messageId': messageId,
       'hopCount': 0,
+      'priority': 1, // Phase 4 priority
       'timestamp': DateTime.now().toIso8601String(),
     };
 
-    final String payloadJson = json.encode(payloadObj);
-    
     // Save locally as SOS message
     final message = Message(
       id: messageId,
@@ -684,62 +682,16 @@ class MessagingService {
       status: MessageStatus.sent,
     );
     await dbHelper.insertMessage(message);
-    _messageUpdatedController.sink.add(null);
+    _messageUpdatedController.sink.add('broadcast');
 
-    // Flood to all neighbors
-    final neighbors = discoveryService.getConnectedDevices();
-    for (var peer in neighbors) {
-      await discoveryService.sendMessageToEndpoint(peer.deviceId, payloadJson);
-    }
+    // Use _relayMessage to handle the flooding with priority logic
+    _relayMessage('broadcast', payload);
     
-    debugPrint('[SOS] SOS Broadcast sent to ${neighbors.length} neighbors');
+    debugPrint('[SOS] SOS Broadcast initiated via priority flooding');
   }
 
-  Future<void> _processIncomingFileMetadata(String senderEndpointId, int filePayloadId, String fileName, String type, {String? senderName, String? senderUuid, int? incomingPayloadId}) async {
-    // This is called when we receive the metadata BYTES for a FILE payload
-    final User? me = await dbHelper.getUser('me');
-    final String myUuid = me?.uuid ?? 'me';
-    
-    String finalContent = fileName;
-    if (_incomingFilePaths.containsKey(filePayloadId)) {
-      final tempPath = _incomingFilePaths[filePayloadId]!;
-      finalContent = await _moveToPermanentLocation(tempPath, fileName);
-      _incomingFilePaths.remove(filePayloadId);
-    }
 
-    final msgId = const Uuid().v4();
-    final message = Message(
-      id: msgId,
-      senderUuid: senderUuid ?? senderEndpointId,
-      receiverUuid: myUuid,
-      content: finalContent,
-      timestamp: DateTime.now(),
-      type: type == 'image' ? MessageType.image : (type == 'pdf' ? MessageType.pdf : (type == 'audio' ? MessageType.audio : MessageType.file)),
-      status: MessageStatus.delivered,
-      payloadId: filePayloadId,
-      progress: 0.0,
-      isFileAccepted: false,
-    );
-    
-    await dbHelper.insertMessage(message);
-    String displayMsg = 'File: $fileName';
-    if (type == 'image') displayMsg = '📷 Photo';
-    if (type == 'pdf') displayMsg = '📄 PDF Document';
-    if (type == 'audio') displayMsg = '🎙️ Voice Note';
-
-    int unreadIncrement = (NotificationService.activeChatUuid == (senderUuid ?? senderEndpointId)) ? 0 : 1;
-    await _updateChatRecord(senderUuid ?? senderEndpointId, displayMsg, message.timestamp, unreadIncrement, peerName: senderName);
-    _messageUpdatedController.sink.add(null);
-    
-    NotificationService.showIncomingMessage(
-      'Message from ${senderName ?? senderEndpointId}',
-      displayMsg,
-      senderUuid: senderUuid ?? senderEndpointId,
-      senderName: senderName,
-    );
-  }
-
-  Future<void> _processIncomingText(String senderEndpointId, String text, {String? senderName, String? senderUuid, int? incomingPayloadId}) async {
+  Future<void> _processIncomingText(String senderEndpointId, String text, {String? senderName, String? senderUuid, int? incomingPayloadId, DateTime? expiresAt}) async {
     final User? me = await dbHelper.getUser('me');
     final String myUuid = me?.uuid ?? 'me';
     final msgId = const Uuid().v4();
@@ -753,12 +705,13 @@ class MessagingService {
       status: MessageStatus.delivered,
       payloadId: incomingPayloadId,
       progress: 1.0,
+      expiresAt: expiresAt,
     );
     if (incomingPayloadId != null) _payloadToMessageId[incomingPayloadId] = msgId;
     await dbHelper.insertMessage(message);
     int unreadIncrement = (NotificationService.activeChatUuid == (senderUuid ?? senderEndpointId)) ? 0 : 1;
     await _updateChatRecord(senderUuid ?? senderEndpointId, text, message.timestamp, unreadIncrement, peerName: senderName);
-    _messageUpdatedController.sink.add(null);
+    _messageUpdatedController.sink.add(senderUuid ?? senderEndpointId);
     final chat = await dbHelper.getChatByPeerUuid(senderUuid ?? senderEndpointId);
     NotificationService.showIncomingMessage(
       'Message from ${chat?.peerName ?? senderName ?? senderEndpointId}',
@@ -769,94 +722,13 @@ class MessagingService {
     );
   }
 
-  Future<void> _processIncomingImage(String senderEndpointId, String base64Content, String fileName, {String? senderName, String? senderUuid, int? incomingPayloadId}) async {
-    final User? me = await dbHelper.getUser('me');
-    final String myUuid = me?.uuid ?? 'me';
-    final bytes = base64Decode(base64Content);
-    final directory = await getApplicationDocumentsDirectory();
-    final mediaDir = Directory(p.join(directory.path, 'received_media'));
-    if (!await mediaDir.exists()) await mediaDir.create(recursive: true);
-    final file = File(p.join(mediaDir.path, fileName));
-    await file.writeAsBytes(bytes);
 
-    final msgId = const Uuid().v4();
-    final message = Message(
-      id: msgId,
-      senderUuid: senderUuid ?? senderEndpointId,
-      receiverUuid: myUuid,
-      content: file.path,
-      timestamp: DateTime.now(),
-      type: MessageType.image,
-      status: MessageStatus.delivered,
-      payloadId: incomingPayloadId,
-      progress: 1.0,
-      isFileAccepted: false,
-    );
-    if (incomingPayloadId != null) _payloadToMessageId[incomingPayloadId] = msgId;
-    await dbHelper.insertMessage(message);
-    int unreadIncrement = (NotificationService.activeChatUuid == (senderUuid ?? senderEndpointId)) ? 0 : 1;
-    await _updateChatRecord(senderUuid ?? senderEndpointId, '📷 Photo', message.timestamp, unreadIncrement, peerName: senderName);
-    _messageUpdatedController.sink.add(null);
-    final chat = await dbHelper.getChatByPeerUuid(senderUuid ?? senderEndpointId);
-    NotificationService.showIncomingMessage(
-      'Message from ${chat?.peerName ?? senderName ?? senderEndpointId}',
-      '📷 Photo',
-      senderUuid: senderUuid ?? senderEndpointId,
-      senderName: chat?.peerName ?? senderName,
-      senderProfileImage: chat?.peerProfileImage,
-    );
-  }
-
-  Future<void> _processIncomingPdf(String senderEndpointId, String base64Content, String fileName, {String? senderName, String? senderUuid, int? incomingPayloadId}) async {
-    final User? me = await dbHelper.getUser('me');
-    final String myUuid = me?.uuid ?? 'me';
-    final bytes = base64Decode(base64Content);
-    final directory = await getApplicationDocumentsDirectory();
-    final mediaDir = Directory(p.join(directory.path, 'received_media'));
-    if (!await mediaDir.exists()) await mediaDir.create(recursive: true);
-    final file = File(p.join(mediaDir.path, fileName));
-    await file.writeAsBytes(bytes);
-
-    final msgId = const Uuid().v4();
-    final message = Message(
-      id: msgId,
-      senderUuid: senderUuid ?? senderEndpointId,
-      receiverUuid: myUuid,
-      content: file.path,
-      timestamp: DateTime.now(),
-      type: MessageType.pdf,
-      status: MessageStatus.delivered,
-      payloadId: incomingPayloadId,
-      progress: 1.0,
-      isFileAccepted: false,
-    );
-    if (incomingPayloadId != null) _payloadToMessageId[incomingPayloadId] = msgId;
-    await dbHelper.insertMessage(message);
-    int unreadIncrement = (NotificationService.activeChatUuid == (senderUuid ?? senderEndpointId)) ? 0 : 1;
-    await _updateChatRecord(senderUuid ?? senderEndpointId, '📄 PDF Document', message.timestamp, unreadIncrement, peerName: senderName);
-    _messageUpdatedController.sink.add(null);
-    final chat = await dbHelper.getChatByPeerUuid(senderUuid ?? senderEndpointId);
-    NotificationService.showIncomingMessage(
-      'Message from ${chat?.peerName ?? senderName ?? senderEndpointId}',
-      '📄 PDF Document',
-      senderUuid: senderUuid ?? senderEndpointId,
-      senderName: chat?.peerName ?? senderName,
-      senderProfileImage: chat?.peerProfileImage,
-    );
-  }
 
   Future<void> acceptFile(String messageId) async {
     final message = await dbHelper.getMessageById(messageId);
     if (message == null) return;
-    if (message.type == MessageType.image) {
-      try {
-        await Gal.putImage(message.content);
-      } catch (e) {
-        debugPrint('Error saving to gallery: $e');
-      }
-    }
     await dbHelper.insertMessage(message.copyWith(isFileAccepted: true));
-    _messageUpdatedController.sink.add(null);
+    _messageUpdatedController.sink.add(message.senderUuid);
   }
 
   Future<void> _processIncomingProfileImage(String senderEndpointId, String base64Content, String extension, {String? senderName, String? senderUuid}) async {
@@ -869,10 +741,10 @@ class MessagingService {
     await file.writeAsBytes(bytes);
 
     await _updateChatRecord(senderUuid, null, null, 0, peerName: senderName, peerProfileImage: file.path);
-    _messageUpdatedController.sink.add(null);
+    _messageUpdatedController.sink.add(senderUuid);
   }
 
-  Future<void> sendTextMessage(String receiverUuid, String receiverName, String content) async {
+  Future<void> sendTextMessage(String receiverUuid, String receiverName, String content, {Duration? burnDuration}) async {
     final User? me = await dbHelper.getUser('me');
     final messageId = const Uuid().v4();
     String? encryptedPayload;
@@ -892,6 +764,7 @@ class MessagingService {
       'targetUuid': receiverUuid,
       'messageId': messageId,
       'hopCount': 0,
+      'burnDuration': burnDuration?.inSeconds,
     });
 
     final message = Message(
@@ -904,6 +777,7 @@ class MessagingService {
       status: MessageStatus.sending,
       hopCount: 0,
       encryptedPayload: isEncrypted ? encryptedPayload : null,
+      expiresAt: burnDuration != null ? DateTime.now().add(burnDuration) : null,
     );
     
     await dbHelper.insertMessage(message);
@@ -913,6 +787,7 @@ class MessagingService {
     try {
       final device = discoveryService.getDeviceByUuid(receiverUuid);
       if (device != null && device.state == SessionState.connected) {
+        // Direct Send
         final payloadId = await discoveryService.sendMessageToEndpoint(device.deviceId, payloadObj);
         if (payloadId != null) {
           _payloadToMessageId[payloadId] = messageId;
@@ -920,209 +795,36 @@ class MessagingService {
         }
         await dbHelper.insertMessage(message.copyWith(status: MessageStatus.sent, payloadId: payloadId));
       } else {
-        await dbHelper.insertMessage(message.copyWith(status: MessageStatus.queued));
-        _relayMessage(receiverUuid, json.decode(payloadObj));
-      }
-    } catch (e) {
-      await dbHelper.insertMessage(message.copyWith(status: MessageStatus.failed));
-    }
-    _messageUpdatedController.sink.add(null);
-  }
-
-  Future<void> sendImageMessage(String receiverUuid, String receiverName, String imagePath) async {
-    final file = File(imagePath);
-    if (!await file.exists()) return;
-    final User? me = await dbHelper.getUser('me');
-    final messageId = const Uuid().v4();
-
-    final message = Message(
-      id: messageId,
-      senderUuid: me?.uuid ?? 'me',
-      receiverUuid: receiverUuid,
-      content: imagePath,
-      timestamp: DateTime.now(),
-      type: MessageType.image,
-      status: MessageStatus.sending,
-    );
-    await dbHelper.insertMessage(message);
-    await _updateChatRecord(receiverUuid, '📷 Photo', message.timestamp, 0, peerName: receiverName);
-    _messageUpdatedController.sink.add(null);
-
-    try {
-      final device = discoveryService.getDeviceByUuid(receiverUuid);
-      if (device != null && device.state == SessionState.connected) {
-        // 1. Send File Payload
-        final filePayloadId = await discoveryService.sendFileToEndpoint(device.deviceId, imagePath);
-        
-        if (filePayloadId != null) {
-          // 2. Send Metadata Bytes
-          final String metadata = json.encode({
-            'type': 'file_metadata',
-            'subType': 'image',
-            'fileName': p.basename(imagePath),
-            'filePayloadId': filePayloadId,
-            'senderName': me?.deviceName ?? 'Unknown User',
-            'senderUuid': me?.uuid ?? '',
-            'targetUuid': receiverUuid,
-            'messageId': messageId,
-          });
-          
-          await discoveryService.sendMessageToEndpoint(device.deviceId, metadata);
-          await dbHelper.updateMessagePayloadId(messageId, filePayloadId);
-          await dbHelper.insertMessage(message.copyWith(status: MessageStatus.sent, payloadId: filePayloadId));
+        // Mesh Send
+        final String? nextHopEndpointId = await _findNextHop(receiverUuid);
+        if (nextHopEndpointId != null) {
+          debugPrint('[MeshSend] Sending $messageId via next hop $nextHopEndpointId');
+          await discoveryService.sendMessageToEndpoint(nextHopEndpointId, payloadObj);
+          await dbHelper.insertMessage(message.copyWith(status: MessageStatus.relay));
+        } else {
+          // No path found, flood to neighbors or queue
+          final neighbors = discoveryService.getConnectedDevices();
+          if (neighbors.isNotEmpty) {
+            debugPrint('[MeshSend] No path found for $receiverUuid. Flooding to ${neighbors.length} neighbors.');
+            for (var neighbor in neighbors) {
+              await discoveryService.sendMessageToEndpoint(neighbor.deviceId, payloadObj);
+            }
+            await dbHelper.insertMessage(message.copyWith(status: MessageStatus.relay));
+          } else {
+            debugPrint('[MeshSend] Offline. Queuing message $messageId');
+            await dbHelper.insertMessage(message.copyWith(status: MessageStatus.queued));
+          }
         }
-      } else {
-        await dbHelper.insertMessage(message.copyWith(status: MessageStatus.queued));
       }
     } catch (e) {
+      debugPrint('[MessagingService] Error in sendTextMessage: $e');
       await dbHelper.insertMessage(message.copyWith(status: MessageStatus.failed));
     }
     _messageUpdatedController.sink.add(null);
   }
 
-  Future<void> sendPdfMessage(String receiverUuid, String receiverName, String pdfPath) async {
-    final file = File(pdfPath);
-    if (!await file.exists()) return;
-    final User? me = await dbHelper.getUser('me');
-    final messageId = const Uuid().v4();
 
-    final message = Message(
-      id: messageId,
-      senderUuid: me?.uuid ?? 'me',
-      receiverUuid: receiverUuid,
-      content: pdfPath,
-      timestamp: DateTime.now(),
-      type: MessageType.pdf,
-      status: MessageStatus.sending,
-    );
-    await dbHelper.insertMessage(message);
-    await _updateChatRecord(receiverUuid, '📄 PDF Document', message.timestamp, 0, peerName: receiverName);
-    _messageUpdatedController.sink.add(null);
 
-    try {
-      final device = discoveryService.getDeviceByUuid(receiverUuid);
-      if (device != null && device.state == SessionState.connected) {
-        final filePayloadId = await discoveryService.sendFileToEndpoint(device.deviceId, pdfPath);
-        
-        if (filePayloadId != null) {
-          final String metadata = json.encode({
-            'type': 'file_metadata',
-            'subType': 'pdf',
-            'fileName': p.basename(pdfPath),
-            'filePayloadId': filePayloadId,
-            'senderName': me?.deviceName ?? 'Unknown User',
-            'senderUuid': me?.uuid ?? '',
-            'targetUuid': receiverUuid,
-            'messageId': messageId,
-          });
-          
-          await discoveryService.sendMessageToEndpoint(device.deviceId, metadata);
-          await dbHelper.updateMessagePayloadId(messageId, filePayloadId);
-          await dbHelper.insertMessage(message.copyWith(status: MessageStatus.sent, payloadId: filePayloadId));
-        }
-      } else {
-        await dbHelper.insertMessage(message.copyWith(status: MessageStatus.queued));
-      }
-    } catch (e) {
-      await dbHelper.insertMessage(message.copyWith(status: MessageStatus.failed));
-    }
-    _messageUpdatedController.sink.add(null);
-  }
-
-  // --- Voice Notes Implementation ---
-
-  Future<void> startAudioRecording() async {
-    try {
-      if (await _recorder.hasPermission()) {
-        final directory = await getApplicationDocumentsDirectory();
-        final String path = p.join(directory.path, 'recording_${DateTime.now().millisecondsSinceEpoch}.m4a');
-        await _recorder.start(const RecordConfig(), path: path);
-        debugPrint('[VoiceNote] Recording started: $path');
-      }
-    } catch (e) {
-      debugPrint('[VoiceNote] Error starting recording: $e');
-    }
-  }
-
-  Future<String?> stopAudioRecording() async {
-    try {
-      final String? path = await _recorder.stop();
-      debugPrint('[VoiceNote] Recording stopped: $path');
-      return path;
-    } catch (e) {
-      debugPrint('[VoiceNote] Error stopping recording: $e');
-      return null;
-    }
-  }
-
-  Future<void> sendVoiceNote(String receiverUuid, String receiverName, String audioPath) async {
-    final file = File(audioPath);
-    if (!await file.exists()) return;
-    final User? me = await dbHelper.getUser('me');
-    final messageId = const Uuid().v4();
-
-    final message = Message(
-      id: messageId,
-      senderUuid: me?.uuid ?? 'me',
-      receiverUuid: receiverUuid,
-      content: audioPath,
-      timestamp: DateTime.now(),
-      type: MessageType.audio,
-      status: MessageStatus.sending,
-    );
-    await dbHelper.insertMessage(message);
-    await _updateChatRecord(receiverUuid, '🎙️ Voice Note', message.timestamp, 0, peerName: receiverName);
-    _messageUpdatedController.sink.add(null);
-
-    try {
-      final device = discoveryService.getDeviceByUuid(receiverUuid);
-      if (device != null && device.state == SessionState.connected) {
-        final filePayloadId = await discoveryService.sendFileToEndpoint(device.deviceId, audioPath);
-        
-        if (filePayloadId != null) {
-          final String metadata = json.encode({
-            'type': 'file_metadata',
-            'subType': 'audio',
-            'fileName': p.basename(audioPath),
-            'filePayloadId': filePayloadId,
-            'senderName': me?.deviceName ?? 'Unknown User',
-            'senderUuid': me?.uuid ?? '',
-            'targetUuid': receiverUuid,
-            'messageId': messageId,
-          });
-          
-          await discoveryService.sendMessageToEndpoint(device.deviceId, metadata);
-          await dbHelper.updateMessagePayloadId(messageId, filePayloadId);
-          await dbHelper.insertMessage(message.copyWith(status: MessageStatus.sent, payloadId: filePayloadId));
-        }
-      } else {
-        await dbHelper.insertMessage(message.copyWith(status: MessageStatus.queued));
-        _relayMessage(receiverUuid, {
-          'type': 'audio_metadata_relay', // Basic relay for metadata
-          ...json.decode(json.encode(message.toMap())),
-        });
-      }
-    } catch (e) {
-      await dbHelper.insertMessage(message.copyWith(status: MessageStatus.failed));
-    }
-    _messageUpdatedController.sink.add(null);
-  }
-
-  Future<void> playAudioMsg(String path) async {
-    try {
-      await _player.play(DeviceFileSource(path));
-    } catch (e) {
-      debugPrint('[VoiceNote] Error playing audio: $e');
-    }
-  }
-
-  Future<void> pauseAudio() async {
-    await _player.pause();
-  }
-
-  Future<void> stopAudio() async {
-    await _player.stop();
-  }
 
 
   Future<void> sendTypingStatus(String receiverUuid, bool isTyping) async {
@@ -1140,21 +842,112 @@ class MessagingService {
     }
   }
 
+  Future<void> sendAudioMessage(String receiverUuid, String receiverName, String filePath, {Duration? burnDuration}) async {
+    final File file = File(filePath);
+    if (!file.existsSync()) return;
+    
+    final List<int> bytes = await file.readAsBytes();
+    final String base64Content = base64.encode(bytes);
+
+    final User? me = await dbHelper.getUser('me');
+    final messageId = const Uuid().v4();
+    
+    final payload = {
+      'type': 'audio',
+      'content': base64Content,
+      'senderUuid': me?.uuid ?? 'me',
+      'senderName': me?.deviceName ?? 'User',
+      'targetUuid': receiverUuid,
+      'messageId': messageId,
+      'hopCount': 0,
+      'burnDuration': burnDuration?.inSeconds,
+    };
+
+    final message = Message(
+      id: messageId,
+      senderUuid: me?.uuid ?? 'me',
+      receiverUuid: receiverUuid,
+      content: filePath, // Locally we store the path
+      timestamp: DateTime.now(),
+      type: MessageType.audio,
+      status: MessageStatus.sending,
+      hopCount: 0,
+      expiresAt: burnDuration != null ? DateTime.now().add(burnDuration) : null,
+    );
+    
+    await dbHelper.insertMessage(message);
+    _messageUpdatedController.sink.add(receiverUuid);
+
+    await _relayMessage(receiverUuid, payload);
+    
+    // Update status to sent locally (mesh relay will update further if ACKs are implemented for audio)
+    await dbHelper.updateMessageStatus(messageId, MessageStatus.sent);
+    _messageUpdatedController.sink.add(receiverUuid);
+  }
+
+  Future<void> _processIncomingAudio(String senderEndpointId, String base64Content, {String? senderName, String? senderUuid, int? incomingPayloadId, DateTime? expiresAt}) async {
+    try {
+      final bytes = base64.decode(base64Content);
+      final directory = await getApplicationDocumentsDirectory();
+      final String fileName = 'audio_${DateTime.now().millisecondsSinceEpoch}.m4a';
+      final String filePath = p.join(directory.path, 'PTT', fileName);
+      
+      final file = File(filePath);
+      if (!await file.parent.exists()) {
+        await file.parent.create(recursive: true);
+      }
+      await file.writeAsBytes(bytes);
+
+      final User? me = await dbHelper.getUser('me');
+      final String myUuid = me?.uuid ?? 'me';
+      final msgId = const Uuid().v4();
+      
+      final message = Message(
+        id: msgId,
+        senderUuid: senderUuid ?? senderEndpointId,
+        receiverUuid: myUuid,
+        content: filePath,
+        timestamp: DateTime.now(),
+        type: MessageType.audio,
+        status: MessageStatus.delivered,
+        payloadId: incomingPayloadId,
+        progress: 1.0,
+        expiresAt: expiresAt,
+      );
+      
+      if (incomingPayloadId != null) _payloadToMessageId[incomingPayloadId] = msgId;
+      await dbHelper.insertMessage(message);
+      
+      if (senderUuid != null) {
+        _messageUpdatedController.sink.add(senderUuid);
+      } else {
+        _messageUpdatedController.sink.add(senderEndpointId);
+      }
+
+      NotificationService.showIncomingMessage(
+        senderName ?? 'Peer',
+        'Sent a voice message',
+        senderUuid: senderUuid ?? senderEndpointId,
+        senderName: senderName ?? 'Peer',
+      );
+    } catch (e) {
+      debugPrint('[MessagingService] Error processing incoming audio: $e');
+    }
+  }
+
   Future<void> sendBroadcast(String content) async {
     final User? me = await dbHelper.getUser('me');
-    final payload = json.encode({
+    final payload = {
       'type': 'mesh_shout',
       'content': content,
       'senderName': me?.deviceName ?? 'User',
       'senderUuid': me?.uuid ?? '',
       'messageId': const Uuid().v4(),
       'hopCount': 0,
-    });
+      'priority': 1, // Phase 4 priority
+    };
     
-    final neighbors = discoveryService.getConnectedDevices();
-    for (var peer in neighbors) {
-      await discoveryService.sendMessageToEndpoint(peer.deviceId, payload);
-    }
+    _relayMessage('broadcast', payload);
   }
 
   Future<void> sendProfileImage(String receiverUuid) async {
@@ -1212,37 +1005,6 @@ class MessagingService {
           await dbHelper.updateMessagePayloadId(message.id, payloadId);
         }
         await dbHelper.insertMessage(message.copyWith(status: MessageStatus.sent, payloadId: payloadId));
-      } else {
-        // File, Image, PDF, Audio
-        final file = File(message.content);
-        if (!await file.exists()) {
-          debugPrint('[MessagingService] Cannot resend $messageId: File not found');
-          await dbHelper.insertMessage(message.copyWith(status: MessageStatus.failed));
-          return;
-        }
-
-        final filePayloadId = await discoveryService.sendFileToEndpoint(device.deviceId, message.content);
-        if (filePayloadId != null) {
-          String subType = 'file';
-          if (message.type == MessageType.image) subType = 'image';
-          if (message.type == MessageType.pdf) subType = 'pdf';
-          if (message.type == MessageType.audio) subType = 'audio';
-
-          final String metadata = json.encode({
-            'type': 'file_metadata',
-            'subType': subType,
-            'fileName': p.basename(message.content),
-            'filePayloadId': filePayloadId,
-            'senderName': me?.deviceName ?? 'Unknown User',
-            'senderUuid': me?.uuid ?? '',
-            'targetUuid': message.receiverUuid,
-            'messageId': message.id,
-          });
-
-          await discoveryService.sendMessageToEndpoint(device.deviceId, metadata);
-          await dbHelper.updateMessagePayloadId(message.id, filePayloadId);
-          await dbHelper.insertMessage(message.copyWith(status: MessageStatus.sent, payloadId: filePayloadId));
-        }
       }
     } catch (e) {
       debugPrint('[MessagingService] Error resending message $messageId: $e');
@@ -1426,6 +1188,53 @@ class MessagingService {
     }
   }
 
+  Future<void> addMembersToGroup(String groupId, List<String> newMemberUuids) async {
+    final group = await dbHelper.getGroupById(groupId);
+    if (group == null) return;
+
+    final User? me = await dbHelper.getUser('me');
+    final String myUuid = me?.uuid ?? 'me';
+
+    // Combine existing and new members
+    final updatedMembers = Set<String>.from(group.members)..addAll(newMemberUuids);
+    final finalMembers = updatedMembers.toList();
+
+    final updatedGroup = group.copyWith(members: finalMembers);
+    await dbHelper.insertGroup(updatedGroup);
+
+    // 1. Send group_update to existing members
+    final updatePayload = json.encode({
+      'type': 'group_update',
+      'groupId': groupId,
+      'members': finalMembers,
+      'senderUuid': myUuid,
+      'messageId': const Uuid().v4(),
+    });
+
+    for (var memberUuid in group.members) {
+      if (memberUuid == myUuid) continue;
+      _relayMessage(memberUuid, json.decode(updatePayload));
+    }
+
+    // 2. Send group_invite to new members
+    final invitePayload = json.encode({
+      'type': 'group_invite',
+      'groupId': groupId,
+      'groupName': group.name,
+      'members': finalMembers,
+      'senderName': me?.deviceName ?? 'User',
+      'senderUuid': myUuid,
+      'messageId': const Uuid().v4(),
+    });
+
+    for (var memberUuid in newMemberUuids) {
+      if (group.members.contains(memberUuid)) continue;
+      _relayMessage(memberUuid, json.decode(invitePayload));
+    }
+
+    _messageUpdatedController.add(null);
+  }
+
   Future<void> _processIncomingGroupMessage(String senderEndpointId, String groupId, String text, {String? senderName, String? senderUuid, int? incomingPayloadId}) async {
     debugPrint('[MessagingService] _processIncomingGroupMessage: from=$senderUuid, group=$groupId, text=$text');
     final msgId = const Uuid().v4();
@@ -1515,8 +1324,125 @@ class MessagingService {
     }
   }
 
-  void dispose() {
-    _dataSubscription?.cancel();
-    _messageUpdatedController.close();
+}
+
+// --- Background Isolate Helpers for Threading ---
+
+class DijkstraParams {
+  final String myUuid;
+  final String targetUuid;
+  final Map<String, List<String>> meshTopology;
+  final Map<String, Map<String, dynamic>> meshNodeMetadata;
+  final List<Map<String, dynamic>> connectedDevices;
+
+  DijkstraParams({
+    required this.myUuid,
+    required this.targetUuid,
+    required this.meshTopology,
+    required this.meshNodeMetadata,
+    required this.connectedDevices,
+  });
+}
+
+class DijkstraResult {
+  final List<String> path;
+  final double cost;
+  final String? nextHopDeviceId;
+
+  DijkstraResult({required this.path, required this.cost, this.nextHopDeviceId});
+}
+
+/// Core Dijkstra logic extracted for use in a background Isolate
+DijkstraResult? _dijkstraIsolate(DijkstraParams params) {
+  final String myUuid = params.myUuid;
+  final String targetUuid = params.targetUuid;
+
+  final Map<String, double> dist = {myUuid: 0.0};
+  final Map<String, String> parent = {};
+  final Set<String> unvisited = {myUuid};
+
+  // Build set of all known Uuids in topology
+  final Set<String> allNodes = {myUuid, ...params.meshTopology.keys};
+  for (var neighbors in params.meshTopology.values) {
+    allNodes.addAll(neighbors);
   }
+
+  for (var node in allNodes) {
+    if (node != myUuid) dist[node] = double.infinity;
+    unvisited.add(node);
+  }
+
+  while (unvisited.isNotEmpty) {
+    String? current;
+    double minSafeDist = double.infinity;
+
+    for (var node in unvisited) {
+      if (dist[node]! < minSafeDist) {
+        minSafeDist = dist[node]!;
+        current = node;
+      }
+    }
+
+    if (current == null || dist[current] == double.infinity) break;
+    if (current == targetUuid) break;
+
+    unvisited.remove(current);
+
+    List<String> neighbors = [];
+    if (current == myUuid) {
+      neighbors = params.connectedDevices.map((d) => d['uuid'] as String).toList();
+    } else {
+      neighbors = params.meshTopology[current] ?? [];
+    }
+
+    for (var neighbor in neighbors) {
+      if (!unvisited.contains(neighbor)) continue;
+
+      double edgeWeight = 1.0;
+      
+      // Node metadata and device info for penalty calculation
+      final nodeMeta = params.meshNodeMetadata[neighbor];
+      final device = params.connectedDevices.firstWhere(
+        (d) => d['uuid'] == neighbor, 
+        orElse: () => {}
+      );
+
+      double rssi = (device['rssi'] as double?) ?? -90.0;
+      if (rssi < -70) {
+        edgeWeight += (rssi + 70).abs() * 0.1;
+      }
+
+      bool isBackbone = (device['isBackbone'] as bool?) ?? nodeMeta?['isBackbone'] ?? false;
+      if (!isBackbone) edgeWeight += 0.5;
+
+      int battery = (device['batteryLevel'] as int?) ?? nodeMeta?['batteryLevel'] ?? 50;
+      if (battery < 20) edgeWeight += 2.0;
+
+      double alt = dist[current]! + edgeWeight;
+      if (alt < (dist[neighbor] ?? double.infinity)) {
+        dist[neighbor] = alt;
+        parent[neighbor] = current;
+      }
+    }
+  }
+
+  if (!parent.containsKey(targetUuid)) return null;
+
+  List<String> path = [targetUuid];
+  String step = targetUuid;
+  while (parent[step] != myUuid) {
+    step = parent[step]!;
+    path.insert(0, step);
+  }
+
+  final nextHopDevice = params.connectedDevices.firstWhere(
+    (d) => d['uuid'] == step, 
+    orElse: () => {}
+  );
+
+  return DijkstraResult(
+    path: path,
+    cost: dist[targetUuid]!,
+    nextHopDeviceId: nextHopDevice['deviceId'] as String?,
+  );
 }

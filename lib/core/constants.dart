@@ -26,6 +26,12 @@ class AppColors {
   static const Color offline = Color(0xFF64748B);      // Slate grey for offline
   static const Color meshBadge = Color(0xFFF59E0B);    // Amber/Gold for mesh connection
   
+  // Premium UI Accents
+  static const Color glassBase = Color(0x1AFFFFFF);    // Low opacity white for glass effect
+  static const Color glassBorder = Color(0x33FFFFFF);  // Border for glass containers
+  static const Color glowBlue = Color(0x400A85FF);     // Soft blue glow
+  static const Color glowGreen = Color(0x4010B981);    // Soft green glow
+  
   // WhatsApp Colors
   static const Color whatsappGreen = Color(0xFF25D366);
   static const Color whatsappDarkGreen = Color(0xFF075E54);

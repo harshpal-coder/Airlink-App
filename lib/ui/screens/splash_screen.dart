@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'dart:io';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:provider/provider.dart';
@@ -7,6 +8,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'dart:math' as math;
 import '../../services/chat_provider.dart';
 import '../../background/connectivity_service.dart';
+import '../../utils/background_utils.dart';
 
 // Extracted Colors based on Tailwind config
 class SplashColors {
@@ -101,6 +103,16 @@ class _SplashScreenState extends State<SplashScreen> with TickerProviderStateMix
     await Future.delayed(const Duration(seconds: 3));
 
     if (!mounted) return;
+
+    // Check for battery optimizations on Android
+    if (Platform.isAndroid) {
+      final isIgnored = await BackgroundUtils.isBatteryOptimizationIgnored();
+      if (!isIgnored) {
+        // We show a simple snackbar or dialog to encourage disabling optimization
+        // For splash, a snackbar is less intrusive but might be missed.
+        // Let's use a small delay and a snackbar once we land on home.
+      }
+    }
 
     // Check if the user has already completed profile setup
     final prefs = await SharedPreferences.getInstance();
