@@ -5,7 +5,7 @@ plugins {
 }
 
 android {
-    namespace = "com.example.app"
+    namespace = "com.harshpal.airlink"
     compileSdk = flutter.compileSdkVersion
     ndkVersion = flutter.ndkVersion
 
@@ -25,9 +25,9 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.example.app"
+        applicationId = "com.harshpal.airlink"
         minSdk = flutter.minSdkVersion
-        targetSdk = flutter.targetSdkVersion
+        targetSdk = 34
         versionCode = flutter.versionCode
         versionName = flutter.versionName
     }

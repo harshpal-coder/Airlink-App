@@ -3,6 +3,7 @@ import '../models/device_model.dart';
 import '../models/session_state.dart';
 import '../utils/connectivity_logger.dart';
 import 'discovery_service.dart';
+import 'reputation_service.dart';
 
 /// Event emitted by the ReconnectionManager.
 class ReconnectEvent {
@@ -36,6 +37,7 @@ enum ReconnectEventType {
 /// increasing delays, and emits events for monitoring.
 class ReconnectionManager {
   final DiscoveryService _discoveryService;
+  final ReputationService _reputationService;
 
   /// Ultra-aggressive backoff schedule in seconds: 0 (immediate), 1, 3, 7, 15, 30
   static const List<int> _backoffSchedule = [0, 1, 3, 7, 15, 30];
@@ -49,8 +51,11 @@ class ReconnectionManager {
   final _eventController = StreamController<ReconnectEvent>.broadcast();
   Stream<ReconnectEvent> get events => _eventController.stream;
 
-  ReconnectionManager({required DiscoveryService discoveryService})
-      : _discoveryService = discoveryService;
+  ReconnectionManager({
+    required DiscoveryService discoveryService,
+    required ReputationService reputationService,
+  })  : _discoveryService = discoveryService,
+        _reputationService = reputationService;
 
   /// Schedule a reconnection attempt for a device.
   /// If already reconnecting, this is a no-op.
@@ -191,8 +196,12 @@ class ReconnectionManager {
       // Check if connection succeeded
       final updatedDevice = _discoveryService.getDeviceByUuid(uuid);
       if (updatedDevice != null && updatedDevice.state == SessionState.connected) {
+        // Success: Improve reputation
+        _reputationService.recordConnectionEvent(uuid, true);
         onConnectionRestored(uuid);
       } else {
+        // Failure: Damage reputation
+        _reputationService.recordConnectionEvent(uuid, false);
         ConnectivityLogger.debug(
           LogCategory.reconnection,
           'Reconnect attempt ${state.attemptCount} failed for ${device.deviceName}',

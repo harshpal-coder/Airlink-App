@@ -18,6 +18,7 @@ import 'messaging_service.dart';
 import 'reconnection_manager.dart';
 import 'connectivity_state_monitor.dart';
 import 'message_queue_manager.dart';
+import 'reputation_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:open_filex/open_filex.dart';
 import 'package:flutter_background_service/flutter_background_service.dart';
@@ -32,6 +33,7 @@ class ChatProvider extends ChangeNotifier with WidgetsBindingObserver {
   final ReconnectionManager reconnectionManager;
   final ConnectivityStateMonitor connectivityStateMonitor;
   final MessageQueueManager messageQueueManager;
+  final ReputationService reputationService;
   final DatabaseHelper dbHelper = DatabaseHelper.instance;
 
   List<Device> discoveredDevices = [];
@@ -100,6 +102,7 @@ class ChatProvider extends ChangeNotifier with WidgetsBindingObserver {
     required this.reconnectionManager,
     required this.connectivityStateMonitor,
     required this.messageQueueManager,
+    required this.reputationService,
   }) {
     _init();
   }
@@ -130,6 +133,18 @@ class ChatProvider extends ChangeNotifier with WidgetsBindingObserver {
           // If we already have this ID, decide which one to keep (prefer connected)
           if (!uniqueDevicesMap.containsKey(id) || 
               (d.state == SessionState.connected && uniqueDevicesMap[id]!.state != SessionState.connected)) {
+            
+            // Enrich with reputation data
+            final reputationInfo = await reputationService.getReputation(id);
+            if (reputationInfo != null) {
+              d = d.copyWith(
+                reputationScore: reputationInfo['score'] as double,
+                successfulConnections: reputationInfo['success_count'] as int,
+                failedConnections: reputationInfo['fail_count'] as int,
+                totalConnectionTimeMinutes: reputationInfo['total_time_minutes'] as int,
+              );
+            }
+            
             uniqueDevicesMap[id] = d;
           }
         }

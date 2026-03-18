@@ -1,4 +1,4 @@
-package com.example.app
+package com.harshpal.airlink
 
 import android.content.BroadcastReceiver
 import android.content.Context

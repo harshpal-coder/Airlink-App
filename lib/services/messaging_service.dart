@@ -14,6 +14,8 @@ import 'heartbeat_manager.dart';
 import 'message_queue_manager.dart';
 import 'database_helper.dart';
 import 'notification_service.dart';
+import 'reputation_service.dart';
+import 'peer_ai_service.dart';
 import '../models/session_state.dart';
 import '../models/user_model.dart';
 import '../models/message_model.dart';
@@ -26,6 +28,8 @@ class MessagingService {
   final DiscoveryService discoveryService;
   final HeartbeatManager heartbeatManager;
   final MessageQueueManager messageQueueManager;
+  final ReputationService reputationService;
+  final PeerAIService aiService;
   final DatabaseHelper dbHelper = DatabaseHelper.instance;
   final SignalProtocolService _signalService = SignalProtocolService();
   SignalProtocolService get signalService => _signalService;
@@ -103,6 +107,7 @@ class MessagingService {
   StreamSubscription? _payloadProgressSubscription;
   StreamSubscription? _batterySubscription;
   Timer? _cleanupTimer;
+  Timer? _gossipTimer;
 
   // Store-and-Forward Relay Buffer: targetUuid -> List of messages
   final Map<String, List<Map<String, dynamic>>> _relayBuffer = {};
@@ -113,6 +118,8 @@ class MessagingService {
     required this.discoveryService,
     required this.heartbeatManager,
     required this.messageQueueManager,
+    required this.reputationService,
+    required this.aiService,
   }) {
     _dataSubscription = discoveryService.dataReceived.listen(
       _handleIncomingData,
@@ -128,6 +135,21 @@ class MessagingService {
     messageQueueManager.onResendMessage = resendMessage;
 
     _startCleanupTimer();
+    _startGossipTimer();
+  }
+
+  void _startGossipTimer() {
+    _gossipTimer?.cancel();
+    _gossipTimer = Timer.periodic(const Duration(minutes: 5), (timer) async {
+      final connected = discoveryService.getConnectedDevices();
+      for (var device in connected) {
+        // Only gossip with peers we already trust
+        final rep = await reputationService.getReputation(device.uuid ?? device.deviceId);
+        if ((rep?['composite_score'] ?? 50.0) >= 60.0) {
+          await sendReputationGossip(device.deviceId);
+        }
+      }
+    });
   }
 
   void _startCleanupTimer() {
@@ -151,6 +173,7 @@ class MessagingService {
     _connectionQualityController.close();
     heartbeatManager.stopMonitoring();
     _cleanupTimer?.cancel();
+    _gossipTimer?.cancel();
     _player.dispose();
     debugPrint('[MessagingService] Disposed.');
   }
@@ -275,6 +298,23 @@ class MessagingService {
           _pruneStaleTopology();
           _flushOpportunisticBuffer();
           _messageUpdatedController.add(originalSenderUuid);
+        }
+        return;
+      }
+
+      // Handle reputation gossip update
+      if (type == 'reputation_gossip') {
+        final Map<String, dynamic>? gossip = payload['gossip'] as Map<String, dynamic>?;
+        if (originalSenderUuid != null && gossip != null) {
+          // Verify source integrity: Only take gossip from people we trust
+          final sourceRep = await reputationService.getReputation(originalSenderUuid);
+          final double sourceScore = sourceRep?['composite_score'] ?? 50.0;
+          
+          if (sourceScore >= 60.0) { // Only trust gossip from "Stable" peers or better
+            await reputationService.mergeGossipData(originalSenderUuid, gossip);
+          } else {
+            debugPrint('[Gossip] Ignoring reputation gossip from untrusted peer $originalSenderUuid (Score: $sourceScore)');
+          }
         }
         return;
       }
@@ -495,6 +535,23 @@ class MessagingService {
     }
   }
 
+  Future<void> sendReputationGossip(String endpointId) async {
+    try {
+      final User? me = await dbHelper.getUser('me');
+      final gossipData = await reputationService.getTopPeersForGossip();
+      if (gossipData.isEmpty) return;
+
+      final String payload = json.encode({
+        'type': 'reputation_gossip',
+        'senderUuid': me?.uuid ?? 'me',
+        'gossip': gossipData,
+      });
+      await discoveryService.sendMessageToEndpoint(endpointId, payload);
+    } catch (e) {
+      debugPrint('[MessagingService] Error sending reputation gossip: $e');
+    }
+  }
+
   Future<void> sendMeshUpdate(String endpointId) async {
     try {
       final User? me = await dbHelper.getUser('me');
@@ -561,13 +618,20 @@ class MessagingService {
       targetUuid: targetUuid,
       meshTopology: _meshTopology,
       meshNodeMetadata: _meshNodeMetadata,
-      connectedDevices: connected.map((d) => {
-        'uuid': d.uuid,
-        'deviceId': d.deviceId,
-        'rssi': d.rssi,
-        'isBackbone': d.isBackbone,
-        'batteryLevel': d.batteryLevel,
-      }).toList(),
+      connectedDevices: await Future.wait(connected.map((d) async {
+        final rep = await reputationService.getReputation(d.uuid ?? d.deviceId);
+        return {
+          'uuid': d.uuid,
+          'deviceId': d.deviceId,
+          'rssi': d.rssi,
+          'isBackbone': d.isBackbone,
+          'batteryLevel': d.batteryLevel,
+          'reputationScore': rep?['composite_score'] ?? 50.0,
+        };
+      })),
+      dropProbabilities: {
+        for (var d in connected) d.uuid ?? d.deviceId: aiService.predictDropProbability(d.uuid ?? d.deviceId)
+      },
     );
 
     try {
@@ -1341,7 +1405,9 @@ class DijkstraParams {
     required this.meshTopology,
     required this.meshNodeMetadata,
     required this.connectedDevices,
+    required this.dropProbabilities,
   });
+  final Map<String, double> dropProbabilities;
 }
 
 class DijkstraResult {
@@ -1417,6 +1483,17 @@ DijkstraResult? _dijkstraIsolate(DijkstraParams params) {
 
       int battery = (device['batteryLevel'] as int?) ?? nodeMeta?['batteryLevel'] ?? 50;
       if (battery < 20) edgeWeight += 2.0;
+
+      double reputation = (device['reputationScore'] as double?) ?? 50.0;
+      if (reputation < 30) {
+        edgeWeight += (30 - reputation) * 0.2; // Penalty for low reputation
+      }
+
+      // AI: Predict drop risk and penalize unstable paths
+      final dropProb = params.dropProbabilities[neighbor] ?? 0.0;
+      if (dropProb > 0.5) {
+        edgeWeight += dropProb * 5.0; // Significant penalty for high-risk links
+      }
 
       double alt = dist[current]! + edgeWeight;
       if (alt < (dist[neighbor] ?? double.infinity)) {

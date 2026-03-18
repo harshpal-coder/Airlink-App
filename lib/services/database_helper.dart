@@ -25,7 +25,7 @@ class DatabaseHelper {
 
     return await openDatabase(
       path,
-      version: 14,
+      version: 16,
       onCreate: _createDB,
       onUpgrade: _upgradeDB,
     );
@@ -108,6 +108,18 @@ class DatabaseHelper {
     ''');
 
     await _createSignalTables(db);
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS peer_reputation (
+        uuid TEXT PRIMARY KEY,
+        score REAL NOT NULL DEFAULT 50.0,
+        success_count INTEGER NOT NULL DEFAULT 0,
+        fail_count INTEGER NOT NULL DEFAULT 0,
+        total_time_minutes INTEGER NOT NULL DEFAULT 0,
+        consensus_score REAL NOT NULL DEFAULT 50.0,
+        consensus_count INTEGER NOT NULL DEFAULT 0,
+        last_updated TEXT NOT NULL
+      )
+    ''');
     await _createIndices(db);
   }
 
@@ -181,6 +193,27 @@ class DatabaseHelper {
       }
       if (oldVersion < 15) {
         await db.execute('ALTER TABLE peers ADD COLUMN isVerified INTEGER NOT NULL DEFAULT 0');
+      }
+      if (oldVersion < 16) {
+        await db.execute('''
+          CREATE TABLE IF NOT EXISTS peer_reputation (
+            uuid TEXT PRIMARY KEY,
+            score REAL NOT NULL DEFAULT 50.0,
+            success_count INTEGER NOT NULL DEFAULT 0,
+            fail_count INTEGER NOT NULL DEFAULT 0,
+            total_time_minutes INTEGER NOT NULL DEFAULT 0,
+            consensus_score REAL NOT NULL DEFAULT 50.0,
+            consensus_count INTEGER NOT NULL DEFAULT 0,
+            last_updated TEXT NOT NULL
+          )
+        ''');
+        // If table exists, add columns
+        try {
+          await db.execute('ALTER TABLE peer_reputation ADD COLUMN consensus_score REAL NOT NULL DEFAULT 50.0');
+          await db.execute('ALTER TABLE peer_reputation ADD COLUMN consensus_count INTEGER NOT NULL DEFAULT 0');
+        } catch (e) {
+          // Table might have been created fresh in version 16
+        }
       }
     }
   }

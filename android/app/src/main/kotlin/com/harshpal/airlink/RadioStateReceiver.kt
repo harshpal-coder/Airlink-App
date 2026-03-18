@@ -1,4 +1,4 @@
-package com.example.app
+package com.harshpal.airlink
 
 import android.bluetooth.BluetoothAdapter
 import android.content.BroadcastReceiver

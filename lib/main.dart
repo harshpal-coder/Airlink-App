@@ -7,12 +7,16 @@ import 'core/constants.dart';
 import 'services/database_helper.dart';
 import 'services/discovery_service.dart';
 import 'services/messaging_service.dart';
+import 'services/peer_ai_service.dart';
 import 'services/notification_service.dart';
 import 'services/chat_provider.dart';
 import 'services/heartbeat_manager.dart';
 import 'services/reconnection_manager.dart';
+import 'services/reputation_service.dart';
 import 'services/connectivity_state_monitor.dart';
 import 'services/message_queue_manager.dart';
+import 'services/adaptive_discovery_manager.dart';
+import 'services/motion_service.dart';
 import 'package:flutter_background_service/flutter_background_service.dart';
 import 'background/background_tasks.dart';
 import 'background/radio_state_receiver.dart';
@@ -52,7 +56,20 @@ void main() async {
   }
 
   // ── Instantiate core services in dependency order ──
-  final discoveryService = DiscoveryService();
+  final reputationService = ReputationService();
+  final aiService = PeerAIService();
+  final motionService = MotionService();
+  motionService.start();
+
+  // Link Motion to AI
+  motionService.stateChanges.listen((state) {
+    aiService.updateLocalMotionState(state);
+  });
+
+  final discoveryService = DiscoveryService(
+    reputationService: reputationService,
+    aiService: aiService,
+  );
 
   final heartbeatManager = HeartbeatManager(
     discoveryService: discoveryService,
@@ -60,6 +77,7 @@ void main() async {
 
   final reconnectionManager = ReconnectionManager(
     discoveryService: discoveryService,
+    reputationService: reputationService,
   );
 
   final connectivityStateMonitor = ConnectivityStateMonitor();
@@ -72,7 +90,14 @@ void main() async {
     discoveryService: discoveryService,
     heartbeatManager: heartbeatManager,
     messageQueueManager: messageQueueManager,
+    reputationService: reputationService,
+    aiService: aiService,
   );
+
+  final adaptiveDiscoveryManager = AdaptiveDiscoveryManager(
+    discoveryService: discoveryService,
+  );
+  adaptiveDiscoveryManager.start();
 
   // ── Wire cross-manager event listeners ──
 
@@ -152,6 +177,7 @@ void main() async {
     reconnectionManager: reconnectionManager,
     connectivityStateMonitor: connectivityStateMonitor,
     messageQueueManager: messageQueueManager,
+    reputationService: reputationService,
   ));
 }
 
@@ -161,6 +187,7 @@ class MyApp extends StatelessWidget {
   final ReconnectionManager reconnectionManager;
   final ConnectivityStateMonitor connectivityStateMonitor;
   final MessageQueueManager messageQueueManager;
+  final ReputationService reputationService;
 
   const MyApp({
     super.key,
@@ -169,6 +196,7 @@ class MyApp extends StatelessWidget {
     required this.reconnectionManager,
     required this.connectivityStateMonitor,
     required this.messageQueueManager,
+    required this.reputationService,
   });
 
   @override
@@ -182,6 +210,7 @@ class MyApp extends StatelessWidget {
             reconnectionManager: reconnectionManager,
             connectivityStateMonitor: connectivityStateMonitor,
             messageQueueManager: messageQueueManager,
+            reputationService: reputationService,
           ),
         ),
       ],

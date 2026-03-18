@@ -14,6 +14,10 @@ class Device {
   bool isPluggedIn;
   final bool isMesh;
   final String? relayedBy;
+  double reputationScore;
+  int successfulConnections;
+  int failedConnections;
+  int totalConnectionTimeMinutes;
 
   Device({
     required this.deviceId,
@@ -29,6 +33,10 @@ class Device {
     this.isPluggedIn = false,
     this.isMesh = false,
     this.relayedBy,
+    this.reputationScore = 50.0, // Starting midpoint reputation
+    this.successfulConnections = 0,
+    this.failedConnections = 0,
+    this.totalConnectionTimeMinutes = 0,
   });
 
   Device copyWith({
@@ -45,6 +53,10 @@ class Device {
     bool? isPluggedIn,
     bool? isMesh,
     String? relayedBy,
+    double? reputationScore,
+    int? successfulConnections,
+    int? failedConnections,
+    int? totalConnectionTimeMinutes,
   }) {
     return Device(
       deviceId: deviceId ?? this.deviceId,
@@ -60,6 +72,10 @@ class Device {
       isPluggedIn: isPluggedIn ?? this.isPluggedIn,
       isMesh: isMesh ?? this.isMesh,
       relayedBy: relayedBy ?? this.relayedBy,
+      reputationScore: reputationScore ?? this.reputationScore,
+      successfulConnections: successfulConnections ?? this.successfulConnections,
+      failedConnections: failedConnections ?? this.failedConnections,
+      totalConnectionTimeMinutes: totalConnectionTimeMinutes ?? this.totalConnectionTimeMinutes,
     );
   }
 }

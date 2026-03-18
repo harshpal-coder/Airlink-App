@@ -1,7 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:app/services/discovery_service.dart';
-import 'package:app/services/heartbeat_manager.dart';
-import 'package:app/models/device_model.dart';
+import 'package:airlink/services/discovery_service.dart';
+import 'package:airlink/services/heartbeat_manager.dart';
+import 'package:airlink/models/device_model.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 class MockDiscoveryService extends DiscoveryService {

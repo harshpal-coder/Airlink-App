@@ -1,7 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'package:libsignal_protocol_dart/libsignal_protocol_dart.dart';
-import 'package:app/services/database_helper.dart';
+import 'package:airlink/services/database_helper.dart';
 
 void main() {
   // Initialize sqflite_ffi for testing

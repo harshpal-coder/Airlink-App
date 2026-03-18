@@ -7,6 +7,8 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/device_model.dart';
 import 'package:flutter/foundation.dart';
+import 'reputation_service.dart';
+import 'peer_ai_service.dart';
 import '../utils/connectivity_logger.dart';
 
 import '../models/session_state.dart';
@@ -51,6 +53,10 @@ class DiscoveryService {
   final _fileReceivedController = StreamController<Map<String, dynamic>>.broadcast();
   Stream<Map<String, dynamic>> get fileReceived => _fileReceivedController.stream;
 
+  final ReputationService _reputationService;
+  final PeerAIService _aiService;
+  final Map<String, DateTime> _connectionStartTimes = {};
+
 
   final List<Device> _devices = [];
   String _userName = 'Unknown';
@@ -88,6 +94,23 @@ class DiscoveryService {
     }
     
     _refreshTimer = Timer.periodic(interval, (timer) async {
+      _executeRefresh();
+    });
+  }
+
+  Future<int> getBatteryLevel() async {
+    return _currentBatteryLevel;
+  }
+
+  void updateRefreshInterval(Duration interval) {
+    debugPrint('[DiscoveryService] Updating refresh interval to ${interval.inSeconds}s');
+    _refreshTimer?.cancel();
+    _refreshTimer = Timer.periodic(interval, (timer) async {
+      _executeRefresh();
+    });
+  }
+
+  Future<void> _executeRefresh() async {
       ConnectivityLogger.debug(LogCategory.discovery,
           'Periodic refresh: Restarting browsing/advertising...');
       if (_isBrowsing) await startBrowsing(forceRestart: true);
@@ -95,7 +118,6 @@ class DiscoveryService {
 
       // Also trigger a background reconnect check for known devices
       _checkBackgroundReconnections();
-    });
   }
 
   void _checkBackgroundReconnections() {
@@ -172,10 +194,16 @@ class DiscoveryService {
       debugPrint(
           '[DiscoveryService] RSSI of ${_devices[index].deviceName}: $rssi dBm - Notifying listeners');
     } else {
-      _devices[index].rssi = rssi; // Update silenty
+      _devices[index].rssi = rssi;
+      _aiService.recordTelemetry(_devices[index].uuid ?? deviceId, rssi);
+      _discoveredDevicesController.sink.add(List.from(_devices));
     }
   }
 
+
+  DiscoveryService({ReputationService? reputationService, PeerAIService? aiService})
+      : _reputationService = reputationService ?? ReputationService(),
+        _aiService = aiService ?? PeerAIService();
 
   Future<bool> init(String userName, {String? localUuid}) async {
     _userName = userName;
@@ -415,13 +443,31 @@ class DiscoveryService {
         },
         onConnectionResult: (id, status) {
           debugPrint('[DiscoveryService] Connection result for $id: $status');
+          final device = getDeviceById(id);
+          final uuid = device?.uuid;
+          
           if (status == Status.CONNECTED) {
+            _connectionStartTimes[id] = DateTime.now();
+            if (uuid != null) {
+              _reputationService.recordConnectionEvent(uuid, true);
+            }
             updateDeviceState(id, SessionState.connected);
           } else {
+            if (uuid != null) {
+              _reputationService.recordConnectionEvent(uuid, false);
+            }
             updateDeviceState(id, SessionState.notConnected);
           }
         },
         onDisconnected: (id) {
+          final startTime = _connectionStartTimes.remove(id);
+          if (startTime != null) {
+            final duration = DateTime.now().difference(startTime).inMinutes;
+            final uuid = getDeviceById(id)?.uuid;
+            if (uuid != null) {
+              _reputationService.recordConnectionEvent(uuid, true, durationMinutes: duration);
+            }
+          }
           updateDeviceState(id, SessionState.notConnected);
         },
       );
@@ -534,13 +580,31 @@ class DiscoveryService {
         },
         onConnectionResult: (id, status) {
           debugPrint('[DiscoveryService] Connection result for $id: $status');
+          final device = getDeviceById(id);
+          final uuid = device?.uuid;
+
           if (status == Status.CONNECTED) {
+            _connectionStartTimes[id] = DateTime.now();
+            if (uuid != null) {
+              _reputationService.recordConnectionEvent(uuid, true);
+            }
             updateDeviceState(id, SessionState.connected);
           } else {
+            if (uuid != null) {
+              _reputationService.recordConnectionEvent(uuid, false);
+            }
             updateDeviceState(id, SessionState.notConnected);
           }
         },
         onDisconnected: (id) {
+          final startTime = _connectionStartTimes.remove(id);
+          if (startTime != null) {
+            final duration = DateTime.now().difference(startTime).inMinutes;
+            final uuid = getDeviceById(id)?.uuid;
+            if (uuid != null) {
+              _reputationService.recordConnectionEvent(uuid, true, durationMinutes: duration);
+            }
+          }
           updateDeviceState(id, SessionState.notConnected);
         },
       );
@@ -706,6 +770,18 @@ class DiscoveryService {
       _discoveredDevicesController.sink.add(List.from(_devices));
       // Emit for all state changes so ChatProvider can react to disconnections
       _connectedDeviceController.sink.add(_devices[index]);
+    }
+  }
+
+  int getDiscoveredDeviceCount() {
+    return _devices.length;
+  }
+
+  Device? getDeviceById(String id) {
+    try {
+      return _devices.firstWhere((d) => d.deviceId == id);
+    } catch (_) {
+      return null;
     }
   }
 
