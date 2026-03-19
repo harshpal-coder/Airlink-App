@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>AirLink | Secure Mesh Networking</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    colors: {
+                        "primary": "#0a78ff",
+                        "primary-hover": "#0a85ff",
+                        "accent-green": "#10b981",
+                        "accent-amber": "#f59e0b",
+                        "background-light": "#f5f7f8",
+                        "background-dark": "#0f1823",
+                    },
+                    fontFamily: {
+                        "display": ["Plus Jakarta Sans", "sans-serif"]
+                    },
+                    borderRadius: {
+                        "DEFAULT": "0.25rem",
+                        "lg": "0.5rem",
+                        "xl": "0.75rem",
+                        "2xl": "1rem",
+                        "full": "9999px"
+                    },
+                },
+            },
+        }
+    </script>
+<style>
+        .glass-card {
+            background: rgba(255, 255, 255, 0.03);
+            backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        .glass-border {
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+        .mesh-gradient {
+            background: radial-gradient(circle at 50% 50%, rgba(10, 120, 255, 0.15) 0%, transparent 70%);
+        }
+        .card-glow {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: radial-gradient(circle at top right, rgba(255,255,255,0.05), transparent 60%);
+            pointer-events: none;
+        }
+    </style>
+</head>
+<body class="bg-background-light dark:bg-background-dark font-display text-slate-900 dark:text-slate-100 selection:bg-primary/30">
+<div class="relative min-h-screen flex flex-col overflow-x-hidden">
+<header class="sticky top-0 z-50 w-full glass-card border-b-0 border-white/5 px-6 lg:px-24 py-4 flex items-center justify-between">
+<div class="flex items-center gap-3">
+<div class="bg-primary p-1.5 rounded-lg flex items-center justify-center">
+<span class="material-symbols-outlined text-white text-2xl">hub</span>
+</div>
+<h2 class="text-xl font-extrabold tracking-tight">AirLink</h2>
+</div>
+<nav class="hidden md:flex items-center gap-10">
+<a class="text-sm font-medium hover:text-primary transition-colors" href="#">Features</a>
+<a class="text-sm font-medium hover:text-primary transition-colors" href="#">How it Works</a>
+<a class="text-sm font-medium hover:text-primary transition-colors" href="#">Security</a>
+<a class="text-sm font-medium hover:text-primary transition-colors" href="#">FAQ</a>
+</nav>
+<div class="flex items-center gap-4">
+<button class="bg-primary hover:bg-primary-hover text-white px-5 py-2.5 rounded-xl text-sm font-bold tracking-wide transition-all shadow-lg shadow-primary/20">
+                    Download App
+                </button>
+</div>
+</header>
+<main class="flex-grow">
+<section class="relative px-6 lg:px-24 pt-20 pb-32 overflow-hidden">
+<div class="absolute inset-0 mesh-gradient pointer-events-none"></div>
+<div class="max-w-[1200px] mx-auto grid lg:grid-cols-2 gap-16 items-center">
+<div class="relative z-10 flex flex-col gap-8">
+<div class="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-primary/10 border border-primary/20 text-primary text-xs font-bold uppercase tracking-widest">
+<span class="material-symbols-outlined text-sm">verified_user</span>
+                            Decentralized &amp; Encrypted
+                        </div>
+<h1 class="text-5xl lg:text-7xl font-extrabold leading-[1.1] tracking-tight text-slate-900 dark:text-white">
+                            Connect Anywhere. <br/>
+<span class="text-primary">No Internet</span> Required.
+                        </h1>
+<p class="text-lg lg:text-xl text-slate-600 dark:text-slate-400 max-w-xl leading-relaxed">
+                            AirLink is a secure, decentralized mesh network messaging app that keeps you connected when traditional networks fail. Communicating peer-to-peer has never been this seamless.
+                        </p>
+<div class="flex flex-wrap gap-4">
+<button class="bg-primary hover:bg-primary-hover text-white px-8 py-4 rounded-xl font-bold transition-all shadow-xl shadow-primary/25 flex items-center gap-2">
+<span class="material-symbols-outlined">download</span>
+                                Download App
+                            </button>
+<button class="glass-card glass-border hover:bg-white/10 px-8 py-4 rounded-xl font-bold transition-all flex items-center gap-2">
+<span class="material-symbols-outlined">info</span>
+                                How it Works
+                            </button>
+</div>
+</div>
+<div class="relative">
+<div class="absolute -inset-4 bg-primary/20 blur-3xl rounded-full opacity-30"></div>
+<div class="relative glass-card rounded-3xl p-4 lg:p-8 aspect-square flex items-center justify-center border-white/10">
+<div class="w-full h-full rounded-2xl bg-slate-900 overflow-hidden relative group">
+<div class="absolute inset-0 bg-cover bg-center transition-transform duration-700 group-hover:scale-105" data-alt="Digital representation of connected nodes and glowing mesh network data points" style="background-image: url('https://lh3.googleusercontent.com/aida-public/AB6AXuB5TXXlTVrle7raTSoe0sBZfuHRKTZ2hV0TfPFyPkS0aRc2aq5o2K5oWuRF0vJmCcABrjjjlw2mUVtBaIX2E-aK3IhbXVMePmnMAvjJatWW2URXz3NH5tQucXWZQOnnMf4hbnTqEIqFjCx0LJZ-3xOyo9cSG8jRMAMy4v4rz919oCmc6kQJigQr4Z2n2vnIhuoh2DNAOBalKNieYxsYCbVCkOWmAotbGwTVkzy03p7TxTF1dphyB3n8-qxeIKWIy41IX6H1Ue7wEY4')">
+</div>
+<div class="absolute inset-0 bg-gradient-to-t from-background-dark via-transparent to-transparent"></div>
+<div class="absolute bottom-6 left-6 right-6">
+<div class="glass-card p-4 rounded-xl border-white/20">
+<div class="flex items-center gap-3">
+<div class="size-2 rounded-full bg-accent-green animate-pulse"></div>
+<p class="text-xs font-medium text-white/70">Mesh Network Active: 24 Nodes Nearby</p>
+</div>
+</div>
+</div>
+</div>
+</div>
+</div>
+</div>
+</section>
+<section class="px-6 lg:px-24 py-24 bg-slate-50 dark:bg-slate-900/30">
+<div class="max-w-[1200px] mx-auto">
+<div class="flex flex-col gap-4 mb-16 text-center lg:text-left">
+<h2 class="text-3xl lg:text-5xl font-extrabold tracking-tight">Cutting-Edge Features</h2>
+<p class="text-slate-600 dark:text-slate-400 max-w-2xl text-lg">Our decentralized architecture bypasses central servers, ensuring your communication is resilient, private, and always available.</p>
+</div>
+<div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
+<div class="glass-card relative overflow-hidden p-10 rounded-3xl border-white/5 flex flex-col gap-6 hover:border-primary/40 hover:bg-white/[0.05] transition-all group">
+<div class="card-glow"></div>
+<div class="size-16 rounded-2xl bg-primary/10 flex items-center justify-center text-primary group-hover:scale-110 transition-transform">
+<span class="material-symbols-outlined text-4xl">wifi_tethering</span>
+</div>
+<div>
+<h3 class="text-2xl font-bold mb-4">Direct P2P Connectivity</h3>
+<p class="text-slate-600 dark:text-slate-400 leading-relaxed">Fast, direct communication between devices using advanced local radio hopping protocols. AirLink optimizes signal routing in real-time to find the fastest path between nodes.</p>
+<div class="mt-6 flex items-center gap-2 text-primary font-bold text-sm">
+<span>Learn about hopping</span>
+<span class="material-symbols-outlined text-sm">arrow_forward</span>
+</div>
+</div>
+</div>
+<div class="glass-card relative overflow-hidden p-10 rounded-3xl border-white/5 flex flex-col gap-6 hover:border-accent-green/40 hover:bg-white/[0.05] transition-all group">
+<div class="card-glow"></div>
+<div class="size-16 rounded-2xl bg-accent-green/10 flex items-center justify-center text-accent-green group-hover:scale-110 transition-transform">
+<span class="material-symbols-outlined text-4xl">cloud_off</span>
+</div>
+<div>
+<h3 class="text-2xl font-bold mb-4">Offline Messaging</h3>
+<p class="text-slate-600 dark:text-slate-400 leading-relaxed">No internet, no problem. Stay in touch anywhere, anytime, even in complete network blackouts. Our store-and-forward mechanism ensures messages reach targets as soon as a path opens.</p>
+<div class="mt-6 flex items-center gap-2 text-accent-green font-bold text-sm">
+<span>Sync technology</span>
+<span class="material-symbols-outlined text-sm">arrow_forward</span>
+</div>
+</div>
+</div>
+<div class="glass-card relative overflow-hidden p-10 rounded-3xl border-white/5 flex flex-col gap-6 hover:border-accent-amber/40 hover:bg-white/[0.05] transition-all group">
+<div class="card-glow"></div>
+<div class="size-16 rounded-2xl bg-accent-amber/10 flex items-center justify-center text-accent-amber group-hover:scale-110 transition-transform">
+<span class="material-symbols-outlined text-4xl">qr_code_2</span>
+</div>
+<div>
+<h3 class="text-2xl font-bold mb-4">QR Code Linking</h3>
+<p class="text-slate-600 dark:text-slate-400 leading-relaxed">Simple and secure way to connect with peers via proximity scanning. Bypass centralized directories and establish trusted, hardware-verified links in seconds without sharing sensitive info.</p>
+<div class="mt-6 flex items-center gap-2 text-accent-amber font-bold text-sm">
+<span>Proximity setup</span>
+<span class="material-symbols-outlined text-sm">arrow_forward</span>
+</div>
+</div>
+</div>
+<div class="glass-card relative overflow-hidden p-10 rounded-3xl border-white/5 flex flex-col gap-6 hover:border-primary/40 hover:bg-white/[0.05] transition-all group">
+<div class="card-glow"></div>
+<div class="size-16 rounded-2xl bg-primary/10 flex items-center justify-center text-primary group-hover:scale-110 transition-transform">
+<span class="material-symbols-outlined text-4xl">encrypted</span>
+</div>
+<div>
+<h3 class="text-2xl font-bold mb-4">Identity Verification</h3>
+<p class="text-slate-600 dark:text-slate-400 leading-relaxed">Cryptographic proof of identity for every user. End-to-end encryption is standard, utilizing the Double Ratchet Algorithm for forward secrecy on every single conversation.</p>
+<div class="mt-6 flex items-center gap-2 text-primary font-bold text-sm">
+<span>Security whitepaper</span>
+<span class="material-symbols-outlined text-sm">arrow_forward</span>
+</div>
+</div>
+</div>
+<div class="glass-card relative overflow-hidden p-10 rounded-3xl border-white/5 flex flex-col gap-6 hover:border-accent-green/40 hover:bg-white/[0.05] transition-all group lg:col-span-2">
+<div class="card-glow"></div>
+<div class="size-16 rounded-2xl bg-accent-green/10 flex items-center justify-center text-accent-green group-hover:scale-110 transition-transform">
+<span class="material-symbols-outlined text-4xl">diversity_3</span>
+</div>
+<div class="flex-grow">
+<h3 class="text-2xl font-bold mb-4">Reputation Gossiping</h3>
+<p class="text-slate-600 dark:text-slate-400 leading-relaxed mb-4">Community-driven trust system that filters out bad actors automatically. Nodes share reputation scores, allowing the network to heal and route around malicious or unstable participants. This decentralized governance ensures long-term network health without a central authority.</p>
+<div class="flex items-center gap-2 text-accent-green font-bold text-sm">
+<span>Community standards</span>
+<span class="material-symbols-outlined text-sm">arrow_forward</span>
+</div>
+</div>
+</div>
+</div>
+</div>
+</section>
+<section class="px-6 lg:px-24 py-32 overflow-hidden">
+<div class="max-w-[1000px] mx-auto">
+<div class="text-center mb-20">
+<h2 class="text-3xl lg:text-5xl font-extrabold tracking-tight mb-6">How it Works</h2>
+<div class="h-1.5 w-24 bg-primary mx-auto rounded-full"></div>
+</div>
+<div class="relative space-y-12">
+<div class="absolute left-[27px] top-6 bottom-6 w-[2px] bg-white/10 hidden md:block"></div>
+<div class="relative flex flex-col md:flex-row gap-8 items-start">
+<div class="z-10 size-14 rounded-full glass-card flex items-center justify-center text-primary border-primary/30 shrink-0">
+<span class="material-symbols-outlined font-bold">radar</span>
+</div>
+<div class="flex flex-col gap-2 pt-2">
+<h3 class="text-2xl font-extrabold text-primary">Step 1: Scan &amp; Connect</h3>
+<p class="text-lg text-slate-600 dark:text-slate-400">Quick proximity discovery via Bluetooth Low Energy and Wi-Fi Direct. Your device automatically finds peers in your immediate area to form the first links of the mesh.</p>
+</div>
+</div>
+<div class="relative flex flex-col md:flex-row gap-8 items-start">
+<div class="z-10 size-14 rounded-full glass-card flex items-center justify-center text-accent-amber border-accent-amber/30 shrink-0">
+<span class="material-symbols-outlined font-bold">key</span>
+</div>
+<div class="flex flex-col gap-2 pt-2">
+<h3 class="text-2xl font-extrabold text-accent-amber">Step 2: Verify Identity</h3>
+<p class="text-lg text-slate-600 dark:text-slate-400">A secure cryptographic handshake ensures peer authenticity without needing a central registry. Keys are exchanged and identities verified instantly.</p>
+</div>
+</div>
+<div class="relative flex flex-col md:flex-row gap-8 items-start">
+<div class="z-10 size-14 rounded-full glass-card flex items-center justify-center text-accent-green border-accent-green/30 shrink-0">
+<span class="material-symbols-outlined font-bold">shield</span>
+</div>
+<div class="flex flex-col gap-2 pt-2">
+<h3 class="text-2xl font-extrabold text-accent-green">Step 3: Secure Messaging</h3>
+<p class="text-lg text-slate-600 dark:text-slate-400">Your messages are fully encrypted and routed through the decentralized mesh. Data hops from device to device until it reaches its destination securely.</p>
+</div>
+</div>
+</div>
+</div>
+</section>
+<section class="px-6 lg:px-24 py-20">
+<div class="max-w-[1200px] mx-auto">
+<div class="glass-card rounded-[2.5rem] p-8 lg:p-16 relative overflow-hidden text-center border-primary/20">
+<div class="absolute inset-0 bg-primary/5 -z-10"></div>
+<div class="max-w-2xl mx-auto flex flex-col gap-8">
+<h2 class="text-4xl lg:text-5xl font-black">Ready to build the future of networking?</h2>
+<p class="text-slate-600 dark:text-slate-400 text-lg">Join thousands of users already securing their communications with AirLink's decentralized mesh technology.</p>
+<div class="flex flex-wrap justify-center gap-4">
+<button class="bg-primary hover:bg-primary-hover text-white px-10 py-5 rounded-2xl font-extrabold transition-all shadow-2xl shadow-primary/30 text-lg">
+                                    Get Started for Free
+                                </button>
+</div>
+</div>
+</div>
+</div>
+</section>
+</main>
+<footer class="px-6 lg:px-24 py-12 border-t border-white/5">
+<div class="max-w-[1200px] mx-auto flex flex-col md:flex-row justify-between items-center gap-8">
+<div class="flex items-center gap-3">
+<div class="bg-primary p-1.5 rounded-lg">
+<span class="material-symbols-outlined text-white text-xl">hub</span>
+</div>
+<span class="text-xl font-bold tracking-tight">AirLink</span>
+</div>
+<div class="flex items-center gap-8 text-sm font-medium text-slate-500">
+<a class="hover:text-primary transition-colors flex items-center gap-2" href="#">
+<svg class="w-5 h-5 fill-current" viewbox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>
+                        GitHub
+                    </a>
+<a class="hover:text-primary transition-colors" href="#">Privacy Policy</a>
+<a class="hover:text-primary transition-colors" href="#">Terms of Service</a>
+<a class="hover:text-primary transition-colors" href="#">Documentation</a>
+</div>
+<p class="text-sm text-slate-500">© 2026 AirLink Inc. All rights reserved.</p>
+</div>
+</footer>
+</div>
+</body></html>

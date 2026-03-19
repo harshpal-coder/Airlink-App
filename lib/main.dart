@@ -29,6 +29,7 @@ import 'ui/screens/discovery_screen.dart';
 import 'ui/screens/chat_screen.dart';
 import 'ui/screens/settings_screen.dart';
 import 'ui/screens/network_map_screen.dart';
+import 'ui/screens/qr_link_screen.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -79,6 +80,10 @@ void main() async {
     discoveryService: discoveryService,
     reputationService: reputationService,
   );
+  // Wire the instant-disconnect callback so peer drops trigger an immediate
+  // reconnect attempt (attempt 0 = no delay) instead of waiting for the next
+  // periodic refresh cycle.
+  reconnectionManager.installOn(discoveryService);
 
   final connectivityStateMonitor = ConnectivityStateMonitor();
 
@@ -175,6 +180,7 @@ void main() async {
     discoveryService: discoveryService,
     messagingService: messagingService,
     reconnectionManager: reconnectionManager,
+    heartbeatManager: heartbeatManager,
     connectivityStateMonitor: connectivityStateMonitor,
     messageQueueManager: messageQueueManager,
     reputationService: reputationService,
@@ -185,6 +191,7 @@ class MyApp extends StatelessWidget {
   final DiscoveryService discoveryService;
   final MessagingService messagingService;
   final ReconnectionManager reconnectionManager;
+  final HeartbeatManager heartbeatManager;
   final ConnectivityStateMonitor connectivityStateMonitor;
   final MessageQueueManager messageQueueManager;
   final ReputationService reputationService;
@@ -194,6 +201,7 @@ class MyApp extends StatelessWidget {
     required this.discoveryService,
     required this.messagingService,
     required this.reconnectionManager,
+    required this.heartbeatManager,
     required this.connectivityStateMonitor,
     required this.messageQueueManager,
     required this.reputationService,
@@ -208,6 +216,7 @@ class MyApp extends StatelessWidget {
             discoveryService: discoveryService,
             messagingService: messagingService,
             reconnectionManager: reconnectionManager,
+            heartbeatManager: heartbeatManager,
             connectivityStateMonitor: connectivityStateMonitor,
             messageQueueManager: messageQueueManager,
             reputationService: reputationService,
@@ -228,6 +237,7 @@ class MyApp extends StatelessWidget {
           '/discovery': (context) => const DiscoveryScreen(),
           '/settings': (context) => const SettingsScreen(),
           '/network_map': (context) => const NetworkMapScreen(),
+          '/qr_link': (context) => const QrLinkScreen(),
         },
         onGenerateRoute: (settings) {
           if (settings.name == '/chat') {

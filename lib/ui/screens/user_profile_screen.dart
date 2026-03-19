@@ -6,6 +6,7 @@ import 'package:provider/provider.dart';
 import '../../services/chat_provider.dart';
 import '../../models/device_model.dart';
 import 'package:qr_flutter/qr_flutter.dart';
+import 'package:mobile_scanner/mobile_scanner.dart';
 
 class UserProfileScreen extends StatelessWidget {
   final String peerUuid;
@@ -362,75 +363,11 @@ class UserProfileScreen extends StatelessWidget {
       backgroundColor: AppColors.bgDark,
       isScrollControlled: true,
       shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(32))),
-      builder: (context) => Container(
-        padding: const EdgeInsets.all(32),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text('Verify Identity', style: GoogleFonts.outfit(fontSize: 24, fontWeight: FontWeight.bold, color: AppColors.textPrimary)),
-            const SizedBox(height: 12),
-            Text(
-              'To verify security, scan this code on your peer\'s device or compare the fingerprints.',
-              textAlign: TextAlign.center,
-              style: GoogleFonts.inter(fontSize: 14, color: AppColors.textMuted),
-            ),
-            const SizedBox(height: 32),
-            Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(24),
-              ),
-              child: QrImageView(
-                data: metadata?['localFingerprint'] ?? 'unknown',
-                version: QrVersions.auto,
-                size: 200.0,
-              ),
-            ),
-            const SizedBox(height: 32),
-            Text(
-              'YOUR SAFETY NUMBER',
-              style: GoogleFonts.inter(fontSize: 11, fontWeight: FontWeight.bold, color: AppColors.primaryLight, letterSpacing: 1.2),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              _formatFingerprint(metadata?['localFingerprint']),
-              textAlign: TextAlign.center,
-              style: GoogleFonts.robotoMono(fontSize: 16, color: AppColors.textPrimary, fontWeight: FontWeight.bold),
-            ),
-            const SizedBox(height: 40),
-            Row(
-              children: [
-                Expanded(
-                  child: OutlinedButton(
-                    onPressed: () => Navigator.pop(context),
-                    style: OutlinedButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(vertical: 16),
-                      side: const BorderSide(color: AppColors.glassBorder),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                    ),
-                    child: Text('CLOSE', style: GoogleFonts.inter(fontWeight: FontWeight.bold, color: AppColors.textPrimary)),
-                  ),
-                ),
-                const SizedBox(width: 16),
-                Expanded(
-                  child: ElevatedButton(
-                    onPressed: () {
-                      provider.verifyPeer(peerUuid, true);
-                      Navigator.pop(context);
-                    },
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: AppColors.success,
-                      padding: const EdgeInsets.symmetric(vertical: 16),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                    ),
-                    child: Text('MARK AS VERIFIED', style: GoogleFonts.inter(fontWeight: FontWeight.bold, color: Colors.white)),
-                  ),
-                ),
-              ],
-            ),
-          ],
-        ),
+      builder: (ctx) => _VerifyIdentitySheet(
+        peerUuid: peerUuid,
+        peerName: peerName,
+        metadata: metadata,
+        provider: provider,
       ),
     );
   }
@@ -623,6 +560,397 @@ class UserProfileScreen extends StatelessWidget {
       title: Text(title, style: GoogleFonts.inter(color: Colors.redAccent, fontSize: 16, fontWeight: FontWeight.w600)),
       onTap: onTap,
       contentPadding: const EdgeInsets.symmetric(horizontal: 24),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Verify Identity Bottom Sheet — tabbed: "Your Code" | "Scan Code"
+// ---------------------------------------------------------------------------
+
+class _VerifyIdentitySheet extends StatefulWidget {
+  final String peerUuid;
+  final String peerName;
+  final Map<String, dynamic>? metadata;
+  final ChatProvider provider;
+
+  const _VerifyIdentitySheet({
+    required this.peerUuid,
+    required this.peerName,
+    required this.metadata,
+    required this.provider,
+  });
+
+  @override
+  State<_VerifyIdentitySheet> createState() => _VerifyIdentitySheetState();
+}
+
+class _VerifyIdentitySheetState extends State<_VerifyIdentitySheet>
+    with SingleTickerProviderStateMixin {
+  late TabController _tabController;
+  final MobileScannerController _scanController = MobileScannerController();
+  bool _scanned = false;
+  bool _scanMatch = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _tabController = TabController(length: 2, vsync: this);
+    _tabController.addListener(() {
+      if (_tabController.index == 0 && !_tabController.indexIsChanging) {
+        _scanController.stop();
+      } else if (_tabController.index == 1 && !_tabController.indexIsChanging) {
+        _scanned = false;
+        _scanMatch = false;
+        _scanController.start();
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _tabController.dispose();
+    _scanController.dispose();
+    super.dispose();
+  }
+
+  String _formatSafetyNumber(String? sn) {
+    if (sn == null) return 'Not yet exchanged';
+    return sn;
+  }
+
+  void _onDetect(BarcodeCapture capture) async {
+    if (_scanned) return;
+    final raw = capture.barcodes.firstOrNull?.rawValue;
+    if (raw == null) return;
+
+    final remoteFingerprint = widget.metadata?['localFingerprint'];
+    // The QR shown on the peer's device contains THEIR local fingerprint.
+    // We compare it against what we know as their stored remote fingerprint.
+    final storedRemote = widget.metadata?['remoteFingerprint'];
+
+    setState(() {
+      _scanned = true;
+      _scanMatch = (storedRemote != null && raw == storedRemote) ||
+          (remoteFingerprint != null && raw == remoteFingerprint);
+    });
+
+    await _scanController.stop();
+
+    if (_scanMatch) {
+      await widget.provider.verifyPeer(widget.peerUuid, true);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final metadata = widget.metadata;
+    final localFingerprint = metadata?['localFingerprint'] as String? ?? 'unknown';
+    final safetyNumber = metadata?['combinedSafetyNumber'] as String?;
+    final isVerified = metadata?['isVerified'] == true;
+
+    return Container(
+      constraints: BoxConstraints(
+        maxHeight: MediaQuery.of(context).size.height * 0.85,
+      ),
+      decoration: const BoxDecoration(
+        color: AppColors.bgDark,
+        borderRadius: BorderRadius.vertical(top: Radius.circular(32)),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // Handle
+          Container(
+            margin: const EdgeInsets.only(top: 12),
+            width: 40,
+            height: 4,
+            decoration: BoxDecoration(
+              color: AppColors.glassBorder,
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ),
+          const SizedBox(height: 20),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Text(
+                'Verify Identity',
+                style: GoogleFonts.outfit(fontSize: 22, fontWeight: FontWeight.bold, color: AppColors.textPrimary),
+              ),
+              if (isVerified) ...[
+                const SizedBox(width: 8),
+                const Icon(Icons.verified, color: AppColors.success, size: 22),
+              ],
+            ],
+          ),
+          const SizedBox(height: 4),
+          Text(
+            widget.peerName,
+            style: GoogleFonts.inter(fontSize: 13, color: AppColors.textMuted),
+          ),
+          const SizedBox(height: 16),
+
+          // Tab bar
+          Container(
+            margin: const EdgeInsets.symmetric(horizontal: 24),
+            decoration: BoxDecoration(
+              color: AppColors.surfaceDark,
+              borderRadius: BorderRadius.circular(16),
+            ),
+            child: TabBar(
+              controller: _tabController,
+              indicator: BoxDecoration(
+                color: AppColors.primary,
+                borderRadius: BorderRadius.circular(14),
+              ),
+              indicatorSize: TabBarIndicatorSize.tab,
+              labelColor: Colors.white,
+              unselectedLabelColor: AppColors.textMuted,
+              labelStyle: GoogleFonts.inter(fontSize: 13, fontWeight: FontWeight.bold),
+              unselectedLabelStyle: GoogleFonts.inter(fontSize: 13),
+              dividerColor: Colors.transparent,
+              tabs: const [
+                Tab(text: 'Your Code'),
+                Tab(text: 'Scan Code'),
+              ],
+            ),
+          ),
+          const SizedBox(height: 20),
+
+          // Tab views
+          Flexible(
+            child: TabBarView(
+              controller: _tabController,
+              children: [
+                // ── Your Code ──
+                SingleChildScrollView(
+                  padding: const EdgeInsets.fromLTRB(24, 0, 24, 32),
+                  child: Column(
+                    children: [
+                      Text(
+                        'Show this QR code to ${widget.peerName} or compare the Safety Number below.',
+                        textAlign: TextAlign.center,
+                        style: GoogleFonts.inter(fontSize: 13, color: AppColors.textMuted),
+                      ),
+                      const SizedBox(height: 24),
+                      Container(
+                        padding: const EdgeInsets.all(16),
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(24),
+                        ),
+                        child: QrImageView(
+                          data: localFingerprint,
+                          version: QrVersions.auto,
+                          size: 200.0,
+                        ),
+                      ),
+                      const SizedBox(height: 28),
+                      Text(
+                        'SAFETY NUMBER',
+                        style: GoogleFonts.inter(
+                          fontSize: 11,
+                          fontWeight: FontWeight.bold,
+                          color: AppColors.primaryLight,
+                          letterSpacing: 1.2,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      if (safetyNumber != null)
+                        Text(
+                          _formatSafetyNumber(safetyNumber),
+                          textAlign: TextAlign.center,
+                          style: GoogleFonts.robotoMono(
+                            fontSize: 15,
+                            color: AppColors.textPrimary,
+                            fontWeight: FontWeight.bold,
+                            height: 1.8,
+                          ),
+                        )
+                      else
+                        Text(
+                          'Safety number not available.\nSession must be established first.',
+                          textAlign: TextAlign.center,
+                          style: GoogleFonts.inter(fontSize: 13, color: AppColors.textMuted),
+                        ),
+                      const SizedBox(height: 8),
+                      Text(
+                        'This number is the same on both devices.',
+                        style: GoogleFonts.inter(fontSize: 11, color: AppColors.textMuted),
+                      ),
+                      const SizedBox(height: 28),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: OutlinedButton(
+                              onPressed: () => Navigator.pop(context),
+                              style: OutlinedButton.styleFrom(
+                                padding: const EdgeInsets.symmetric(vertical: 14),
+                                side: const BorderSide(color: AppColors.glassBorder),
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                              ),
+                              child: Text('CLOSE', style: GoogleFonts.inter(fontWeight: FontWeight.bold, color: AppColors.textPrimary)),
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: ElevatedButton(
+                              onPressed: isVerified ? null : () {
+                                widget.provider.verifyPeer(widget.peerUuid, true);
+                                Navigator.pop(context);
+                              },
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: AppColors.success,
+                                disabledBackgroundColor: AppColors.success.withValues(alpha: 0.4),
+                                padding: const EdgeInsets.symmetric(vertical: 14),
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                              ),
+                              child: Text(
+                                isVerified ? 'VERIFIED ✓' : 'MARK VERIFIED',
+                                style: GoogleFonts.inter(fontWeight: FontWeight.bold, color: Colors.white, fontSize: 12),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+
+                // ── Scan Code ──
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(24, 0, 24, 32),
+                  child: Column(
+                    children: [
+                      Text(
+                        'Point your camera at ${widget.peerName}\'s QR code.',
+                        textAlign: TextAlign.center,
+                        style: GoogleFonts.inter(fontSize: 13, color: AppColors.textMuted),
+                      ),
+                      const SizedBox(height: 20),
+
+                      if (_scanned)
+                        // Result card
+                        Container(
+                          width: double.infinity,
+                          padding: const EdgeInsets.symmetric(vertical: 32, horizontal: 24),
+                          decoration: BoxDecoration(
+                            color: (_scanMatch ? AppColors.success : AppColors.error).withValues(alpha: 0.12),
+                            borderRadius: BorderRadius.circular(20),
+                            border: Border.all(
+                              color: _scanMatch ? AppColors.success : AppColors.error,
+                              width: 1.5,
+                            ),
+                          ),
+                          child: Column(
+                            children: [
+                              Icon(
+                                _scanMatch ? Icons.verified_outlined : Icons.gpp_bad_outlined,
+                                size: 48,
+                                color: _scanMatch ? AppColors.success : AppColors.error,
+                              ),
+                              const SizedBox(height: 16),
+                              Text(
+                                _scanMatch ? 'Identity Verified!' : 'Fingerprint Mismatch',
+                                style: GoogleFonts.outfit(
+                                  fontSize: 20,
+                                  fontWeight: FontWeight.bold,
+                                  color: _scanMatch ? AppColors.success : AppColors.error,
+                                ),
+                              ),
+                              const SizedBox(height: 8),
+                              Text(
+                                _scanMatch
+                                    ? '${widget.peerName}\'s identity matches. Peer marked as verified.'
+                                    : 'The scanned code does not match the known identity of ${widget.peerName}. Do not proceed.',
+                                textAlign: TextAlign.center,
+                                style: GoogleFonts.inter(fontSize: 13, color: AppColors.textMuted),
+                              ),
+                            ],
+                          ),
+                        )
+                      else
+                        // Scanner viewport
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(20),
+                          child: SizedBox(
+                            height: 280,
+                            child: Stack(
+                              children: [
+                                MobileScanner(
+                                  controller: _scanController,
+                                  onDetect: _onDetect,
+                                ),
+                                // Scan overlay frame
+                                Center(
+                                  child: Container(
+                                    width: 200,
+                                    height: 200,
+                                    decoration: BoxDecoration(
+                                      border: Border.all(color: AppColors.primary, width: 2.5),
+                                      borderRadius: BorderRadius.circular(16),
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+
+                      const SizedBox(height: 20),
+                      if (_scanned)
+                        Row(
+                          children: [
+                            Expanded(
+                              child: OutlinedButton(
+                                onPressed: () {
+                                  setState(() { _scanned = false; _scanMatch = false; });
+                                  _scanController.start();
+                                },
+                                style: OutlinedButton.styleFrom(
+                                  padding: const EdgeInsets.symmetric(vertical: 14),
+                                  side: const BorderSide(color: AppColors.glassBorder),
+                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                                ),
+                                child: Text('SCAN AGAIN', style: GoogleFonts.inter(fontWeight: FontWeight.bold, color: AppColors.textPrimary, fontSize: 12)),
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: ElevatedButton(
+                                onPressed: () => Navigator.pop(context),
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: _scanMatch ? AppColors.success : AppColors.error,
+                                  padding: const EdgeInsets.symmetric(vertical: 14),
+                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                                ),
+                                child: Text('DONE', style: GoogleFonts.inter(fontWeight: FontWeight.bold, color: Colors.white)),
+                              ),
+                            ),
+                          ],
+                        )
+                      else
+                        SizedBox(
+                          width: double.infinity,
+                          child: OutlinedButton(
+                            onPressed: () => Navigator.pop(context),
+                            style: OutlinedButton.styleFrom(
+                              padding: const EdgeInsets.symmetric(vertical: 14),
+                              side: const BorderSide(color: AppColors.glassBorder),
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                            ),
+                            child: Text('CANCEL', style: GoogleFonts.inter(fontWeight: FontWeight.bold, color: AppColors.textPrimary)),
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

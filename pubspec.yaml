@@ -41,6 +41,9 @@ dependencies:
   file_picker: ^10.3.10
   record: ^6.2.0
   qr_flutter: ^4.1.0
+  mobile_scanner: ^7.2.0
+  saver_gallery: ^4.1.0
+  flutter_image_compress: ^2.4.0
 
 dev_dependencies:
   flutter_test:

@@ -47,18 +47,19 @@ class _ChatListScreenState extends State<ChatListScreen> {
           _buildMeshStatusBadge(),
           IconButton(
             icon: const Icon(
+              Icons.qr_code_scanner_rounded,
+              color: AppColors.primaryLight,
+            ),
+            tooltip: 'Link via QR',
+            onPressed: () => Navigator.pushNamed(context, '/qr_link'),
+          ),
+          IconButton(
+            icon: const Icon(
               Icons.sos_rounded,
               color: Colors.redAccent,
               size: 28,
             ),
             onPressed: () => _showSOSConfirmation(context),
-          ),
-          IconButton(
-            icon: const Icon(
-              Icons.search_rounded,
-              color: AppColors.textSecondary,
-            ),
-            onPressed: () {},
           ),
           IconButton(
             icon: const Icon(

@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'package:flutter_image_compress/flutter_image_compress.dart';
 import 'package:nearby_connections/nearby_connections.dart';
 import 'package:uuid/uuid.dart';
 import 'package:path_provider/path_provider.dart';
@@ -246,12 +247,23 @@ class MessagingService {
       if (type == 'profile_sync') {
         final profileBase64 = payload['content'] as String?;
         final extension = payload['extension'] as String? ?? '.jpg';
-        if (originalSenderUuid != null && profileBase64 != null) {
-          final directory = await getApplicationDocumentsDirectory();
-          final filePath = p.join(directory.path, 'profile_$originalSenderUuid$extension');
-          await File(filePath).writeAsBytes(base64Decode(profileBase64));
-          await _updateChatRecord(originalSenderUuid, null, null, 0, peerName: originalSenderName, peerProfileImage: filePath);
-          debugPrint('[MessagingService] Synced profile image for $originalSenderUuid');
+        final identityKeyBase64 = payload['identityKey'] as String?;
+
+        if (originalSenderUuid != null) {
+          if (profileBase64 != null) {
+            final directory = await getApplicationDocumentsDirectory();
+            final filePath = p.join(directory.path, 'profile_$originalSenderUuid$extension');
+            await File(filePath).writeAsBytes(base64Decode(profileBase64));
+            await _updateChatRecord(originalSenderUuid, null, null, 0, peerName: originalSenderName, peerProfileImage: filePath);
+            debugPrint('[MessagingService] Synced profile image for $originalSenderUuid');
+          }
+          
+          if (identityKeyBase64 != null) {
+            final keyBytes = base64Decode(identityKeyBase64);
+            await _signalService.saveIdentityForPeer(originalSenderUuid, keyBytes); // basic trust on first use
+            debugPrint('[MessagingService] Synced identity key for $originalSenderUuid');
+          }
+
           _messageUpdatedController.add(originalSenderUuid);
           return;
         }
@@ -484,6 +496,35 @@ class MessagingService {
         
         // Relaying audio for mesh
         _relayMessage(targetUuid ?? 'broadcast', payload, excludeEndpointId: senderId);
+      } else if (type == 'image') {
+        final String base64Content = payload['content'] as String;
+        final String extension = payload['extension'] as String? ?? '.jpg';
+        await _processIncomingImage(
+          senderId,
+          base64Content,
+          extension,
+          senderName: originalSenderName,
+          senderUuid: originalSenderUuid,
+          incomingPayloadId: incomingPayloadId,
+          expiresAt: expiresAt,
+        );
+        _relayMessage(targetUuid ?? 'broadcast', payload, excludeEndpointId: senderId);
+      } else if (type == 'group_image') {
+        final String? groupId = payload['groupId'];
+        final String base64Content = payload['content'] as String;
+        final String extension = payload['extension'] as String? ?? '.jpg';
+        if (groupId != null) {
+          await _processIncomingGroupImage(
+            senderId,
+            groupId,
+            base64Content,
+            extension,
+            senderName: originalSenderName,
+            senderUuid: originalSenderUuid,
+            incomingPayloadId: incomingPayloadId,
+          );
+          _relayMessage('broadcast', payload, excludeEndpointId: senderId);
+        }
       } else if (type == 'group_update') {
         final String? groupId = payload['groupId'];
         final List<dynamic>? memberUuids = payload['members'];
@@ -598,6 +639,28 @@ class MessagingService {
     }
   }
 
+  Future<void> leaveGroup(String groupId) async {
+    try {
+      final group = await dbHelper.getGroupById(groupId);
+      if (group == null) return;
+      final me = await dbHelper.getUser('me');
+      if (me == null) return;
+
+      final updatedMembers = List<String>.from(group.members)..remove(me.uuid);
+      
+      final payload = {
+        'type': 'group_update',
+        'groupId': groupId,
+        'members': updatedMembers,
+        'senderUuid': me.uuid,
+        'timestamp': DateTime.now().toIso8601String(),
+      };
+      await _relayMessage('broadcast', payload);
+    } catch (e) {
+      debugPrint('[MessagingService] Error leaving group: $e');
+    }
+  }
+
   /// Finds the next hop towards [targetUuid] using Dijkstra's algorithm.
   /// Considers link costs based on RSSI and node power status.
   Future<String?> _findNextHop(String targetUuid) async {
@@ -650,10 +713,10 @@ class MessagingService {
     return null;
   }
 
-  Future<void> _relayMessage(String targetUuid, Map<String, dynamic> payload, {String? excludeEndpointId}) async {
+  Future<int?> _relayMessage(String targetUuid, Map<String, dynamic> payload, {String? excludeEndpointId}) async {
     int hops = (payload['hopCount'] ?? 0) + 1;
     payload['hopCount'] = hops;
-    if (hops > 12) return;
+    if (hops > 12) return null;
 
     final String updatedPayload = json.encode(payload);
     
@@ -661,12 +724,14 @@ class MessagingService {
     if (payload['priority'] == 1) {
       debugPrint('[MeshRelay] High-Priority message. Flooding to all neighbors.');
       final neighbors = discoveryService.getConnectedDevices();
+      int? firstPayloadId;
       for (var peer in neighbors) {
         if (peer.deviceId != excludeEndpointId) {
-          await discoveryService.sendMessageToEndpoint(peer.deviceId, updatedPayload);
+          final pid = await discoveryService.sendMessageToEndpoint(peer.deviceId, updatedPayload);
+          firstPayloadId ??= pid;
         }
       }
-      return;
+      return firstPayloadId;
     }
 
     // 2. Dijkstra pathfinding for unicast messages
@@ -675,15 +740,14 @@ class MessagingService {
       
       if (nextHopEndpointId != null && nextHopEndpointId != excludeEndpointId) {
         debugPrint('[MeshRelay] Path found for $targetUuid. Next hop: $nextHopEndpointId (hops: $hops)');
-        await discoveryService.sendMessageToEndpoint(nextHopEndpointId, updatedPayload);
-        return;
+        return await discoveryService.sendMessageToEndpoint(nextHopEndpointId, updatedPayload);
       }
       
       // 3. Buffer for later if no path (Opportunistic Buffering)
       if (hops == 1) { // Only buffer if it's the first hop and no path found
         debugPrint('[MeshRelay] No path for $targetUuid. Buffering message.');
         _opportunisticBuffer.putIfAbsent(targetUuid, () => []).add(payload);
-        return;
+        return null;
       }
       
       debugPrint('[MeshRelay] No path for $targetUuid in topology. Flooding to direct neighbors.');
@@ -701,6 +765,7 @@ class MessagingService {
       return b.batteryLevel.compareTo(a.batteryLevel);
     });
 
+    int? firstFloodPid;
     for (var peer in neighbors) {
       if (peer.deviceId == excludeEndpointId) continue;
       
@@ -716,8 +781,10 @@ class MessagingService {
         continue;
       }
 
-      await discoveryService.sendMessageToEndpoint(peer.deviceId, updatedPayload);
+      final pid = await discoveryService.sendMessageToEndpoint(peer.deviceId, updatedPayload);
+      firstFloodPid ??= pid;
     }
+    return firstFloodPid;
   }
 
   Future<void> broadcastSOS({String content = "I need help! Immediate assistance required."}) async {
@@ -857,14 +924,14 @@ class MessagingService {
           _payloadToMessageId[payloadId] = messageId;
           await dbHelper.updateMessagePayloadId(messageId, payloadId);
         }
-        await dbHelper.insertMessage(message.copyWith(status: MessageStatus.sent, payloadId: payloadId));
+        await dbHelper.updateMessageStatus(messageId, MessageStatus.sent);
       } else {
         // Mesh Send
         final String? nextHopEndpointId = await _findNextHop(receiverUuid);
         if (nextHopEndpointId != null) {
           debugPrint('[MeshSend] Sending $messageId via next hop $nextHopEndpointId');
           await discoveryService.sendMessageToEndpoint(nextHopEndpointId, payloadObj);
-          await dbHelper.insertMessage(message.copyWith(status: MessageStatus.relay));
+          await dbHelper.updateMessageStatus(messageId, MessageStatus.relay);
         } else {
           // No path found, flood to neighbors or queue
           final neighbors = discoveryService.getConnectedDevices();
@@ -873,18 +940,17 @@ class MessagingService {
             for (var neighbor in neighbors) {
               await discoveryService.sendMessageToEndpoint(neighbor.deviceId, payloadObj);
             }
-            await dbHelper.insertMessage(message.copyWith(status: MessageStatus.relay));
+            await dbHelper.updateMessageStatus(messageId, MessageStatus.relay);
           } else {
             debugPrint('[MeshSend] Offline. Queuing message $messageId');
-            await dbHelper.insertMessage(message.copyWith(status: MessageStatus.queued));
+            await dbHelper.updateMessageStatus(messageId, MessageStatus.queued);
           }
         }
       }
     } catch (e) {
       debugPrint('[MessagingService] Error in sendTextMessage: $e');
-      await dbHelper.insertMessage(message.copyWith(status: MessageStatus.failed));
+      await dbHelper.updateMessageStatus(messageId, MessageStatus.failed);
     }
-    _messageUpdatedController.sink.add(null);
   }
 
 
@@ -999,6 +1065,244 @@ class MessagingService {
     }
   }
 
+  // ─────────────────── Image Messaging ───────────────────
+
+  /// Compresses and resizes an image for fast mesh transfer.
+  /// Targets max 800px and 75% JPEG quality — typically reduces size by 80-95%.
+  Future<Uint8List> _compressImage(String filePath) async {
+    try {
+      final Uint8List? result = await FlutterImageCompress.compressWithFile(
+        filePath,
+        minWidth: 800,
+        minHeight: 800,
+        quality: 75,
+        format: CompressFormat.jpeg,
+        keepExif: false,
+      );
+      if (result != null && result.isNotEmpty) {
+        debugPrint('[Image] Compressed: ${File(filePath).lengthSync()} bytes → ${result.length} bytes');
+        return result;
+      }
+    } catch (e) {
+      debugPrint('[Image] Compression failed, using original: $e');
+    }
+    return await File(filePath).readAsBytes();
+  }
+
+  Future<void> sendImageMessage(String receiverUuid, String receiverName, String filePath) async {
+    final File file = File(filePath);
+    if (!file.existsSync()) return;
+
+    final Uint8List bytes = await _compressImage(filePath);
+    final String base64Content = base64.encode(bytes);
+    final String extension = '.jpg'; // always JPEG after compression
+
+    final User? me = await dbHelper.getUser('me');
+    final messageId = const Uuid().v4();
+
+    final payload = {
+      'type': 'image',
+      'content': base64Content,
+      'extension': extension,
+      'senderUuid': me?.uuid ?? 'me',
+      'senderName': me?.deviceName ?? 'User',
+      'targetUuid': receiverUuid,
+      'messageId': messageId,
+      'hopCount': 0,
+    };
+
+    final message = Message(
+      id: messageId,
+      senderUuid: me?.uuid ?? 'me',
+      receiverUuid: receiverUuid,
+      content: '📷 Image',
+      timestamp: DateTime.now(),
+      type: MessageType.image,
+      status: MessageStatus.sending,
+      hopCount: 0,
+      imagePath: filePath,
+    );
+
+    await dbHelper.insertMessage(message);
+    await _updateChatRecord(receiverUuid, '📷 Image', message.timestamp, 0, peerName: receiverName);
+    _messageUpdatedController.sink.add(receiverUuid);
+
+    final int? payloadId = await _relayMessage(receiverUuid, payload);
+    if (payloadId != null) {
+      _payloadToMessageId[payloadId] = messageId;
+      await dbHelper.updateMessagePayloadId(messageId, payloadId);
+      await dbHelper.insertMessage(message.copyWith(status: MessageStatus.sent, payloadId: payloadId));
+    } else {
+      await dbHelper.updateMessageStatus(messageId, MessageStatus.sent);
+    }
+    _messageUpdatedController.sink.add(receiverUuid);
+  }
+
+  Future<void> sendGroupImageMessage(String groupId, String groupName, String filePath) async {
+    final File file = File(filePath);
+    if (!file.existsSync()) return;
+
+    final Uint8List bytes = await _compressImage(filePath);
+    final String base64Content = base64.encode(bytes);
+    const String extension = '.jpg'; // always JPEG after compression
+
+    final User? me = await dbHelper.getUser('me');
+    final String myUuid = me?.uuid ?? 'me';
+    final messageId = const Uuid().v4();
+
+    final payload = {
+      'type': 'group_image',
+      'groupId': groupId,
+      'content': base64Content,
+      'extension': extension,
+      'senderUuid': myUuid,
+      'senderName': me?.deviceName ?? 'User',
+      'messageId': messageId,
+      'timestamp': DateTime.now().toIso8601String(),
+      'hopCount': 0,
+    };
+
+    final message = Message(
+      id: messageId,
+      senderUuid: myUuid,
+      senderName: me?.deviceName ?? 'Me',
+      receiverUuid: groupId,
+      content: '📷 Image',
+      timestamp: DateTime.now(),
+      type: MessageType.image,
+      status: MessageStatus.sent,
+      imagePath: filePath,
+    );
+
+    await dbHelper.insertMessage(message);
+    await _updateGroupRecord(groupId, '${me?.deviceName ?? 'You'}: 📷 Image', message.timestamp, 0, name: groupName);
+    _messageUpdatedController.sink.add(null);
+
+    final payloadJson = json.encode(payload);
+    final neighbors = discoveryService.getConnectedDevices();
+    int? firstPayloadId;
+    for (var peer in neighbors) {
+      final pid = await discoveryService.sendMessageToEndpoint(peer.deviceId, payloadJson);
+      firstPayloadId ??= pid;
+    }
+
+    if (firstPayloadId != null) {
+      _payloadToMessageId[firstPayloadId] = messageId;
+      await dbHelper.updateMessagePayloadId(messageId, firstPayloadId);
+      await dbHelper.insertMessage(message.copyWith(status: MessageStatus.sent, payloadId: firstPayloadId));
+    } else {
+      await dbHelper.updateMessageStatus(messageId, MessageStatus.sent);
+    }
+    _messageUpdatedController.sink.add(null);
+  }
+
+  Future<void> _processIncomingImage(
+    String senderEndpointId,
+    String base64Content,
+    String extension, {
+    String? senderName,
+    String? senderUuid,
+    int? incomingPayloadId,
+    DateTime? expiresAt,
+  }) async {
+    try {
+      final bytes = base64.decode(base64Content);
+      final directory = await getApplicationDocumentsDirectory();
+      final imageDir = Directory(p.join(directory.path, 'Images'));
+      if (!await imageDir.exists()) await imageDir.create(recursive: true);
+      final String fileName = 'img_${DateTime.now().millisecondsSinceEpoch}$extension';
+      final String filePath = p.join(imageDir.path, fileName);
+      await File(filePath).writeAsBytes(bytes);
+
+      final User? me = await dbHelper.getUser('me');
+      final String myUuid = me?.uuid ?? 'me';
+      final msgId = const Uuid().v4();
+
+      final message = Message(
+        id: msgId,
+        senderUuid: senderUuid ?? senderEndpointId,
+        receiverUuid: myUuid,
+        content: '📷 Image',
+        timestamp: DateTime.now(),
+        type: MessageType.image,
+        status: MessageStatus.delivered,
+        payloadId: incomingPayloadId,
+        progress: 1.0,
+        imagePath: filePath,
+        expiresAt: expiresAt,
+      );
+
+      if (incomingPayloadId != null) _payloadToMessageId[incomingPayloadId] = msgId;
+      await dbHelper.insertMessage(message);
+      final effectiveSender = senderUuid ?? senderEndpointId;
+      await _updateChatRecord(effectiveSender, '📷 Image', message.timestamp, 
+          NotificationService.activeChatUuid == effectiveSender ? 0 : 1, 
+          peerName: senderName);
+      _messageUpdatedController.sink.add(effectiveSender);
+
+      NotificationService.showIncomingMessage(
+        senderName ?? 'Peer',
+        '📷 Sent an image',
+        senderUuid: effectiveSender,
+        senderName: senderName ?? 'Peer',
+      );
+    } catch (e) {
+      debugPrint('[MessagingService] Error processing incoming image: $e');
+    }
+  }
+
+  Future<void> _processIncomingGroupImage(
+    String senderEndpointId,
+    String groupId,
+    String base64Content,
+    String extension, {
+    String? senderName,
+    String? senderUuid,
+    int? incomingPayloadId,
+  }) async {
+    try {
+      final bytes = base64.decode(base64Content);
+      final directory = await getApplicationDocumentsDirectory();
+      final imageDir = Directory(p.join(directory.path, 'Images'));
+      if (!await imageDir.exists()) await imageDir.create(recursive: true);
+      final String fileName = 'grp_img_${DateTime.now().millisecondsSinceEpoch}$extension';
+      final String filePath = p.join(imageDir.path, fileName);
+      await File(filePath).writeAsBytes(bytes);
+
+      final msgId = const Uuid().v4();
+      final message = Message(
+        id: msgId,
+        senderUuid: senderUuid ?? senderEndpointId,
+        senderName: senderName ?? 'Unknown',
+        receiverUuid: groupId,
+        content: '📷 Image',
+        timestamp: DateTime.now(),
+        type: MessageType.image,
+        status: MessageStatus.delivered,
+        payloadId: incomingPayloadId,
+        progress: 1.0,
+        imagePath: filePath,
+      );
+
+      if (incomingPayloadId != null) _payloadToMessageId[incomingPayloadId] = msgId;
+      await dbHelper.insertMessage(message);
+
+      int unreadIncrement = (NotificationService.activeChatUuid == groupId) ? 0 : 1;
+      final group = await dbHelper.getGroupById(groupId);
+      await _updateGroupRecord(groupId, '${senderName ?? "Someone"}: 📷 Image', message.timestamp, unreadIncrement, name: group?.name);
+      _messageUpdatedController.sink.add(null);
+
+      NotificationService.showIncomingMessage(
+        'Group: ${group?.name ?? 'Unknown Group'}',
+        '${senderName ?? "Someone"}: 📷 Image',
+        senderUuid: groupId,
+        senderName: group?.name,
+      );
+    } catch (e) {
+      debugPrint('[MessagingService] Error processing incoming group image: $e');
+    }
+  }
+
   Future<void> sendBroadcast(String content) async {
     final User? me = await dbHelper.getUser('me');
     final payload = {
@@ -1016,25 +1320,43 @@ class MessagingService {
 
   Future<void> sendProfileImage(String receiverUuid) async {
     final User? me = await dbHelper.getUser('me');
-    if (me?.profileImage == null) return;
-    final file = File(me!.profileImage!);
-    if (!await file.exists()) return;
-    final String payloadObj = json.encode({
-      'type': 'profile_sync',
-      'extension': p.extension(file.path),
-      'content': base64Encode(await file.readAsBytes()),
-      'senderName': me.deviceName,
-      'senderUuid': me.uuid,
-      'targetUuid': receiverUuid,
-      'messageId': const Uuid().v4(),
-      'hopCount': 0,
-    });
+    if (me == null) return;
+
+    String? encodedImage;
+    String extension = '.jpg';
+
+    if (me.profileImage != null) {
+      final file = File(me.profileImage!);
+      if (await file.exists()) {
+        encodedImage = base64Encode(await file.readAsBytes());
+        extension = p.extension(file.path);
+      }
+    }
+
     try {
+      final identityBase64 = await _signalService.getLocalFingerprint();
+
+      final String payloadObj = json.encode({
+        'type': 'profile_sync',
+        'content': encodedImage, // can be null
+        'extension': extension,
+        'identityKey': identityBase64,
+        'senderName': me.deviceName,
+        'senderUuid': me.uuid,
+        'targetUuid': receiverUuid,
+        'messageId': const Uuid().v4(),
+        'hopCount': 0,
+      });
+
       final device = discoveryService.getDeviceByUuid(receiverUuid);
       if (device != null && device.state == SessionState.connected) {
         await discoveryService.sendMessageToEndpoint(device.deviceId, payloadObj);
+      } else {
+        _relayMessage(receiverUuid, json.decode(payloadObj));
       }
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('[MessagingService] Error sending profile_sync: $e');
+    }
   }
 
   Future<void> resendMessage(String messageId) async {

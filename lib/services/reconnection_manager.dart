@@ -51,11 +51,28 @@ class ReconnectionManager {
   final _eventController = StreamController<ReconnectEvent>.broadcast();
   Stream<ReconnectEvent> get events => _eventController.stream;
 
+  /// Timers waiting for onConnectionResult to fire after a connect() call.
+  /// If the callback fires first, the timer is cancelled. If not, we schedule
+  /// the next backoff step — avoiding the fragile 300ms state poll.
+  final Map<String, Timer> _pendingConnectionTimers = {};
+
   ReconnectionManager({
     required DiscoveryService discoveryService,
     required ReputationService reputationService,
   })  : _discoveryService = discoveryService,
         _reputationService = reputationService;
+
+  /// Wire this manager into [discoveryService] so that direct peer disconnections
+  /// immediately schedule a reconnect (attempt 0 = instant, no delay).
+  void installOn(DiscoveryService discoveryService) {
+    discoveryService.onDirectDisconnect = (device) {
+      ConnectivityLogger.info(
+        LogCategory.reconnection,
+        'Direct disconnect from ${device.deviceName} — scheduling instant reconnect',
+      );
+      scheduleReconnect(device);
+    };
+  }
 
   /// Schedule a reconnection attempt for a device.
   /// If already reconnecting, this is a no-op.
@@ -190,30 +207,29 @@ class ReconnectionManager {
     try {
       await _discoveryService.connect(device);
 
-      // Ultra-short window: 300ms is enough for Nearby to start the handshake.
-      await Future.delayed(const Duration(milliseconds: 300));
-
-      // Check if connection succeeded
-      final updatedDevice = _discoveryService.getDeviceByUuid(uuid);
-      if (updatedDevice != null && updatedDevice.state == SessionState.connected) {
-        // Success: Improve reputation
-        _reputationService.recordConnectionEvent(uuid, true);
-        onConnectionRestored(uuid);
-      } else {
-        // Failure: Damage reputation
-        _reputationService.recordConnectionEvent(uuid, false);
-        ConnectivityLogger.debug(
-          LogCategory.reconnection,
-          'Reconnect attempt ${state.attemptCount} failed for ${device.deviceName}',
-        );
-        _eventController.add(ReconnectEvent(
-          uuid: uuid,
-          deviceName: device.deviceName,
-          type: ReconnectEventType.failed,
-          attemptNumber: state.attemptCount,
-        ));
-        _scheduleNextAttempt(uuid);
-      }
+      // Don't poll state — onConnectionResult fires the callback which calls
+      // onConnectionRestored(). We set a 2s safety timeout in case the callback
+      // never arrives (e.g. the platform swallows the result).
+      _pendingConnectionTimers[uuid]?.cancel();
+      _pendingConnectionTimers[uuid] = Timer(const Duration(seconds: 2), () {
+        _pendingConnectionTimers.remove(uuid);
+        // Only retry if we're still not connected
+        final check = _discoveryService.getDeviceByUuid(uuid);
+        if (check != null && check.state != SessionState.connected) {
+          _reputationService.recordConnectionEvent(uuid, false);
+          ConnectivityLogger.debug(
+            LogCategory.reconnection,
+            'No connection result within 2s for ${device.deviceName}. Scheduling next attempt.',
+          );
+          _eventController.add(ReconnectEvent(
+            uuid: uuid,
+            deviceName: device.deviceName,
+            type: ReconnectEventType.failed,
+            attemptNumber: state.attemptCount,
+          ));
+          _scheduleNextAttempt(uuid);
+        }
+      });
     } catch (e) {
       ConnectivityLogger.error(
         LogCategory.reconnection,
@@ -227,6 +243,7 @@ class ReconnectionManager {
   /// Called when a connection is restored (either by us or the peer).
   /// Resets retry state and emits success event.
   void onConnectionRestored(String uuid) {
+    _pendingConnectionTimers.remove(uuid)?.cancel();
     final state = _activeReconnections.remove(uuid);
     if (state != null) {
       state.timer?.cancel();
@@ -280,6 +297,10 @@ class ReconnectionManager {
 
   void dispose() {
     cancelAll();
+    for (final t in _pendingConnectionTimers.values) {
+      t.cancel();
+    }
+    _pendingConnectionTimers.clear();
     _eventController.close();
   }
 }

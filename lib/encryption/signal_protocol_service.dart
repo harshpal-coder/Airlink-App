@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'package:crypto/crypto.dart';
 import 'package:libsignal_protocol_dart/libsignal_protocol_dart.dart';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -134,7 +135,44 @@ class SignalProtocolService {
     return base64.encode(identityKey.serialize());
   }
 
+  Future<void> saveIdentityForPeer(String remoteUuid, Uint8List identityBytes) async {
+    if (!_initialized) await init();
+    final address = SignalProtocolAddress(remoteUuid, 1);
+    final identityKey = IdentityKey.fromBytes(identityBytes, 0);
+    await _identityStore.saveIdentity(address, identityKey);
+  }
+
   int get localRegistrationId => _registrationId;
+
+  /// Computes a combined, deterministic Safety Number for the local<->peer pair.
+  /// Both parties derive the same 60-digit number by sorting the two UUIDs
+  /// lexicographically, concatenating their serialized identity keys, and
+  /// SHA-256 hashing the result — identical to Signal's approach.
+  Future<String?> getCombinedSafetyNumber(String localUuid, String remoteUuid) async {
+    if (!_initialized) await init();
+
+    final address = SignalProtocolAddress(remoteUuid, 1);
+    final remoteIdentityKey = await _identityStore.getIdentity(address);
+    if (remoteIdentityKey == null) return null;
+
+    final localKeyBytes = _identityKeyPair.getPublicKey().serialize();
+    final remoteKeyBytes = remoteIdentityKey.serialize();
+
+    // Sort by UUID lexicographically so both peers get the same byte order.
+    late Uint8List combined;
+    if (localUuid.compareTo(remoteUuid) <= 0) {
+      combined = Uint8List.fromList([...localKeyBytes, ...remoteKeyBytes]);
+    } else {
+      combined = Uint8List.fromList([...remoteKeyBytes, ...localKeyBytes]);
+    }
+
+    final digest = sha256.convert(combined);
+    // Convert each byte to a 0-255 integer, take groups of 5 digits.
+    final digits = digest.bytes.map((b) => b.toString().padLeft(3, '0')).join();
+    // Slice into 5-digit groups (60 chars total from first 60 digits).
+    final safetyNumber = List.generate(12, (i) => digits.substring(i * 5, i * 5 + 5)).join(' ');
+    return safetyNumber;
+  }
 }
 
 // --- Persistent Store Implementations ---

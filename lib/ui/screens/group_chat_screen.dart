@@ -1,12 +1,15 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:intl/intl.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:image_picker/image_picker.dart';
 import '../../services/chat_provider.dart';
 import '../../services/notification_service.dart';
 import 'group_info_screen.dart';
 import '../../models/message_model.dart';
 import '../../core/constants.dart';
+import 'image_viewer_screen.dart';
 
 class GroupChatScreen extends StatefulWidget {
   final String groupId;
@@ -91,6 +94,16 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
 
     _msgController.clear();
     await _provider.sendGroupMessage(widget.groupId, widget.groupName, text);
+  }
+
+  Future<void> _pickAndSendImage() async {
+    final picker = ImagePicker();
+    final XFile? picked = await picker.pickImage(
+      source: ImageSource.gallery,
+    );
+    if (picked != null) {
+      await _provider.sendGroupImage(widget.groupId, picked.path);
+    }
   }
 
   @override
@@ -185,7 +198,9 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
           ],
           Container(
             constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.75),
-            padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
+            padding: message.type == MessageType.image
+                ? const EdgeInsets.all(4)
+                : const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
             decoration: BoxDecoration(
               gradient: isMe
                   ? const LinearGradient(colors: [AppColors.primary, AppColors.primaryLight], begin: Alignment.topLeft, end: Alignment.bottomRight)
@@ -195,10 +210,12 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                 bottomLeft: isMe ? const Radius.circular(20) : const Radius.circular(4),
               ),
             ),
-            child: Text(
-              message.content,
-              style: GoogleFonts.inter(fontSize: 15, color: Colors.white, height: 1.4),
-            ),
+            child: message.type == MessageType.image
+                ? _GroupImageBubble(message: message)
+                : Text(
+                    message.content,
+                    style: GoogleFonts.inter(fontSize: 15, color: Colors.white, height: 1.4),
+                  ),
           ),
           const SizedBox(height: 4),
           Text(
@@ -213,12 +230,21 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
   Widget _buildInputArea() {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
-      decoration: BoxDecoration(
+      decoration: const BoxDecoration(
         color: AppColors.surfaceDark,
       ),
       child: SafeArea(
         child: Row(
           children: [
+            // Image picker button
+            IconButton(
+              icon: const Icon(Icons.image_outlined, color: AppColors.textMuted, size: 24),
+              tooltip: 'Send Image',
+              onPressed: _pickAndSendImage,
+              padding: const EdgeInsets.all(6),
+              constraints: const BoxConstraints(),
+            ),
+            const SizedBox(width: 4),
             Expanded(
               child: Container(
                 decoration: BoxDecoration(color: AppColors.bgDark, borderRadius: BorderRadius.circular(24), border: Border.all(color: AppColors.surfaceElevated)),
@@ -241,6 +267,85 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+// ─── Group Image Bubble ────────────────────────────────────────
+class _GroupImageBubble extends StatelessWidget {
+  final Message message;
+  const _GroupImageBubble({required this.message});
+
+  @override
+  Widget build(BuildContext context) {
+    final imagePath = message.imagePath;
+    if (imagePath == null || !File(imagePath).existsSync()) {
+      return Padding(
+        padding: const EdgeInsets.all(8.0),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.broken_image_rounded, color: Colors.white54, size: 32),
+            const SizedBox(width: 8),
+            Text('Image unavailable', style: GoogleFonts.inter(fontSize: 13, color: Colors.white54)),
+          ],
+        ),
+      );
+    }
+    final heroTag = 'grp_img_${message.id}';
+    final progress = message.progress ?? 1.0;
+    
+    return GestureDetector(
+      onTap: progress >= 1.0 ? () => Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => ImageViewerScreen(imagePath: imagePath, heroTag: heroTag),
+        ),
+      ) : null,
+      child: Stack(
+        children: [
+          ClipRRect(
+            borderRadius: BorderRadius.circular(16),
+            child: Hero(
+              tag: heroTag,
+              child: Opacity(
+                opacity: progress < 1.0 ? 0.6 : 1.0,
+                child: Image.file(
+                  File(imagePath),
+                  width: 200,
+                  height: 200,
+                  fit: BoxFit.cover,
+                  errorBuilder: (ctx, err, st) => const Icon(Icons.broken_image_rounded, color: Colors.white54, size: 48),
+                ),
+              ),
+            ),
+          ),
+          if (progress < 1.0)
+            Positioned.fill(
+              child: Center(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    CircularProgressIndicator(
+                      value: progress > 0 ? progress : null,
+                      color: Colors.white,
+                      strokeWidth: 3,
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      '${(progress * 100).toInt()}%',
+                      style: GoogleFonts.inter(
+                        color: Colors.white,
+                        fontSize: 12,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+        ],
       ),
     );
   }

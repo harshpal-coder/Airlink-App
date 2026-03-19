@@ -117,8 +117,11 @@ class _GroupInfoScreenState extends State<GroupInfoScreen> {
           ListTile(
             leading: const Icon(Icons.exit_to_app_rounded, color: Colors.redAccent),
             title: Text('Leave Group', style: GoogleFonts.inter(color: Colors.redAccent)),
-            onTap: () {
-              // TODO: Implement leaveGroup in Provider
+            onTap: () async {
+              await chatProvider.leaveGroup(group.id);
+              if (context.mounted) {
+                Navigator.of(context).popUntil((route) => route.isFirst);
+              }
             },
           ),
         ],
@@ -162,10 +165,18 @@ class _GroupInfoScreenState extends State<GroupInfoScreen> {
   }
 
   void _showAddMembersSheet(BuildContext context, ChatProvider chatProvider, Group group) {
-    // Reusing the connection-based logic to only show online peers for additions
-    final connectedPeers = chatProvider.discoveredDevices
-        .where((p) => p.state == SessionState.connected && !group.members.contains(p.uuid))
-        .toList();
+    final Map<String, String> availablePeersMap = {};
+    for (var chat in chatProvider.chats) {
+      if (!group.members.contains(chat.peerUuid) && chat.peerUuid.isNotEmpty) {
+        availablePeersMap[chat.peerUuid] = chat.peerName;
+      }
+    }
+    for (var peer in chatProvider.discoveredDevices) {
+      if (peer.uuid != null && !group.members.contains(peer.uuid)) {
+        availablePeersMap[peer.uuid!] = peer.deviceName;
+      }
+    }
+    final availablePeers = availablePeersMap.entries.toList();
 
     showModalBottomSheet(
       context: context,
@@ -198,28 +209,29 @@ class _GroupInfoScreenState extends State<GroupInfoScreen> {
                   ),
                 ),
                 Expanded(
-                  child: connectedPeers.isEmpty
-                      ? Center(child: Text('No new connected peers found', style: TextStyle(color: AppColors.textMuted)))
+                  child: availablePeers.isEmpty
+                      ? Center(child: Text('No new peers found', style: TextStyle(color: AppColors.textMuted)))
                       : ListView.builder(
-                          itemCount: connectedPeers.length,
+                          itemCount: availablePeers.length,
                           itemBuilder: (context, index) {
-                            final peer = connectedPeers[index];
-                            final isSelected = selectedUuids.contains(peer.uuid);
+                            final peerUuid = availablePeers[index].key;
+                            final peerName = availablePeers[index].value;
+                            final isSelected = selectedUuids.contains(peerUuid);
                             return CheckboxListTile(
                               value: isSelected,
                               onChanged: (val) {
                                 setModalState(() {
                                   if (val == true) {
-                                    selectedUuids.add(peer.uuid!);
+                                    selectedUuids.add(peerUuid);
                                   } else {
-                                    selectedUuids.remove(peer.uuid);
+                                    selectedUuids.remove(peerUuid);
                                   }
                                 });
                               },
-                              title: Text(peer.deviceName, style: const TextStyle(color: Colors.white)),
+                              title: Text(peerName, style: const TextStyle(color: Colors.white)),
                               secondary: CircleAvatar(
                                 backgroundColor: AppColors.primary.withValues(alpha: 0.1),
-                                child: Text(peer.deviceName[0], style: TextStyle(color: AppColors.primary)),
+                                child: Text(peerName.isNotEmpty ? peerName[0] : '?', style: TextStyle(color: AppColors.primary)),
                               ),
                             );
                           },

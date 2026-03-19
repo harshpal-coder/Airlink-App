@@ -45,6 +45,11 @@ class _DiscoveryScreenState extends State<DiscoveryScreen> {
         ),
         actions: [
           IconButton(
+            icon: const Icon(Icons.qr_code_scanner_rounded, color: AppColors.primary),
+            onPressed: () => Navigator.pushNamed(context, '/qr_link'),
+            tooltip: 'Link via QR',
+          ),
+          IconButton(
             icon: const Icon(Icons.hub_outlined, color: AppColors.primary),
             onPressed: () {
               Navigator.pushNamed(context, '/network_map');

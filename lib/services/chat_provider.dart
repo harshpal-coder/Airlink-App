@@ -10,6 +10,7 @@ import '../models/chat_model.dart';
 import '../models/group_model.dart';
 import '../models/message_model.dart';
 import '../models/device_model.dart';
+import '../models/peer_model.dart';
 import 'package:uuid/uuid.dart';
 import 'database_helper.dart';
 import 'discovery_service.dart';
@@ -25,12 +26,14 @@ import 'package:flutter_background_service/flutter_background_service.dart';
 import 'package:record/record.dart';
 import 'package:audioplayers/audioplayers.dart';
 import 'notification_service.dart';
+import 'heartbeat_manager.dart';
 import '../utils/connectivity_logger.dart';
 
 class ChatProvider extends ChangeNotifier with WidgetsBindingObserver {
   final DiscoveryService discoveryService;
   final MessagingService messagingService;
   final ReconnectionManager reconnectionManager;
+  final HeartbeatManager heartbeatManager;
   final ConnectivityStateMonitor connectivityStateMonitor;
   final MessageQueueManager messageQueueManager;
   final ReputationService reputationService;
@@ -100,6 +103,7 @@ class ChatProvider extends ChangeNotifier with WidgetsBindingObserver {
     required this.discoveryService,
     required this.messagingService,
     required this.reconnectionManager,
+    required this.heartbeatManager,
     required this.connectivityStateMonitor,
     required this.messageQueueManager,
     required this.reputationService,
@@ -284,10 +288,12 @@ class ChatProvider extends ChangeNotifier with WidgetsBindingObserver {
   }
 
   /// Loads known peer UUIDs from the database and passes them to the
-  /// discovery service so the auto-reconnect logic in [startBrowsing] works.
+  /// discovery service so the auto-reconnect logic in [startBrowsing] works,
+  /// and to [heartbeatManager] so ghost-eviction is suppressed for known peers.
   Future<void> _refreshKnownDevices() async {
     final knownDevices = await dbHelper.getKnownDevices();
     discoveryService.setKnownDevices(knownDevices);
+    heartbeatManager.setKnownUuids(knownDevices.map((d) => d['uuid']!));
   }
 
   /// Starts the periodic re-scan timer if discovery is active.
@@ -553,12 +559,33 @@ class ChatProvider extends ChangeNotifier with WidgetsBindingObserver {
     await messagingService.sendGroupTextMessage(groupId, groupName, content);
   }
 
+  Future<void> sendImage(String receiverUuid, String filePath) async {
+    String peerName = _resolvePeerNameByUuid(receiverUuid);
+    await messagingService.sendImageMessage(receiverUuid, peerName, filePath);
+  }
+
+  Future<void> sendGroupImage(String groupId, String filePath) async {
+    // resolve group name
+    try {
+      final group = groups.firstWhere((g) => g.id == groupId);
+      await messagingService.sendGroupImageMessage(groupId, group.name, filePath);
+    } catch (_) {
+      await messagingService.sendGroupImageMessage(groupId, 'Group', filePath);
+    }
+  }
+
   Future<void> addMembersToGroup(String groupId, List<String> memberUuids) async {
     await messagingService.addMembersToGroup(groupId, memberUuids);
     await loadGroups();
   }
 
   Future<void> deleteGroup(String groupId) async {
+    await dbHelper.deleteGroup(groupId);
+    await loadGroups();
+  }
+
+  Future<void> leaveGroup(String groupId) async {
+    await messagingService.leaveGroup(groupId);
     await dbHelper.deleteGroup(groupId);
     await loadGroups();
   }
@@ -679,14 +706,66 @@ class ChatProvider extends ChangeNotifier with WidgetsBindingObserver {
     final remoteFingerprint = await messagingService.signalService.getRemoteFingerprint(peerUuid);
     final registrationId = messagingService.signalService.localRegistrationId;
     
+    final me = await dbHelper.getUser('me');
+    final localUuid = me?.uuid ?? 'me';
+    final combinedSafetyNumber = await messagingService.signalService.getCombinedSafetyNumber(localUuid, peerUuid);
+    
     final peer = await dbHelper.getPeer(peerUuid);
     
     return {
       'localFingerprint': localFingerprint,
       'remoteFingerprint': remoteFingerprint,
       'registrationId': registrationId,
+      'combinedSafetyNumber': combinedSafetyNumber,
       'isVerified': peer?.isVerified ?? false,
     };
+  }
+
+  /// Links a peer discovered via QR code scan.
+  /// Saves them to the peers table and creates a chat entry (so they appear
+  /// in the Chats list and trigger auto-reconnect when in range).
+  Future<void> linkPeerViaQr(String peerName, String peerUuid) async {
+    // 1. Persist the peer in the "peers" table
+    await dbHelper.insertPeer(
+      Peer(
+        uuid: peerUuid,
+        deviceName: peerName,
+        lastSeen: DateTime.now(),
+        connectionType: 'qr_link',
+      ),
+    );
+
+    // 2. Create a placeholder chat so they show in the chat list and
+    //    are added to the known-devices auto-reconnect list.
+    final existingChat = await dbHelper.getChatByPeerUuid(peerUuid);
+    if (existingChat == null) {
+      await dbHelper.insertChat(Chat(
+        id: 'chat_$peerUuid',
+        peerUuid: peerUuid,
+        peerName: peerName,
+        lastMessage: '',
+        lastMessageTime: DateTime.now(),
+        unreadCount: 0,
+      ));
+    }
+
+    // 3. Refresh known devices so discovery auto-connects when in range
+    await _refreshKnownDevices();
+
+    // 4. Trigger a fresh discovery scan
+    if (isBrowsing) {
+      await discoveryService.stopDiscovery();
+      await Future.delayed(const Duration(milliseconds: 150));
+      await discoveryService.startBrowsing();
+    }
+    if (isAdvertising) {
+      await discoveryService.stopAdvertising();
+      await Future.delayed(const Duration(milliseconds: 150));
+      await discoveryService.startAdvertising();
+    }
+
+    await loadChats();
+    notifyListeners();
   }
 
   Future<void> verifyPeer(String peerUuid, bool isVerified) async {

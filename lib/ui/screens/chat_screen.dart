@@ -7,11 +7,13 @@ import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:intl/intl.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:image_picker/image_picker.dart';
 import '../../services/chat_provider.dart';
 import '../../services/notification_service.dart';
 import '../../models/message_model.dart';
 import '../../core/constants.dart';
 import 'user_profile_screen.dart';
+import 'image_viewer_screen.dart';
 
 class ChatScreen extends StatefulWidget {
   final String peerUuid;
@@ -137,6 +139,16 @@ class _ChatScreenState extends State<ChatScreen> {
     _isTyping = false;
     _provider.sendTypingStatus(widget.peerUuid, false);
     await _provider.sendMessage(widget.peerUuid, text, burnDuration: _burnDuration);
+  }
+
+  Future<void> _pickAndSendImage() async {
+    final picker = ImagePicker();
+    final XFile? picked = await picker.pickImage(
+      source: ImageSource.gallery,
+    );
+    if (picked != null) {
+      await _provider.sendImage(widget.peerUuid, picked.path);
+    }
   }
 
 
@@ -363,6 +375,12 @@ class _ChatScreenState extends State<ChatScreen> {
                     ),
                   ),
                   const SizedBox(width: 4),
+                  IconButton(
+                    icon: const Icon(Icons.image_outlined, color: AppColors.textMuted, size: 24),
+                    onPressed: _pickAndSendImage,
+                    tooltip: 'Send image',
+                  ),
+                  const SizedBox(width: 4),
                   Expanded(
                     child: TextField(
                       controller: _msgController,
@@ -569,6 +587,9 @@ class _MessageBubble extends StatelessWidget {
   }
 
   Widget _buildMessageContent(Message message, {required bool isMe}) {
+    if (message.type == MessageType.image) {
+      return _ImageMessageBubble(message: message, isMe: isMe);
+    }
     if (message.type == MessageType.text) {
       return Text(message.content, style: GoogleFonts.inter(fontSize: 15, color: Colors.white, height: 1.4));
     }
@@ -701,6 +722,82 @@ class _AudioMessageBubbleState extends State<_AudioMessageBubble> {
               ),
             ],
           ),
+        ],
+      ),
+    );
+  }
+}
+
+// ─── Image Message Bubble ───────────────────────────────────────
+class _ImageMessageBubble extends StatelessWidget {
+  final Message message;
+  final bool isMe;
+  const _ImageMessageBubble({required this.message, required this.isMe});
+
+  @override
+  Widget build(BuildContext context) {
+    final imagePath = message.imagePath;
+    if (imagePath == null || !File(imagePath).existsSync()) {
+      return Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(Icons.broken_image_rounded, color: Colors.white54, size: 32),
+          const SizedBox(width: 8),
+          Text('Image unavailable', style: GoogleFonts.inter(fontSize: 13, color: Colors.white54)),
+        ],
+      );
+    }
+    final heroTag = 'img_${message.id}';
+    final progress = message.progress ?? 1.0;
+    return GestureDetector(
+      onTap: progress >= 1.0 ? () => Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => ImageViewerScreen(imagePath: imagePath, heroTag: heroTag),
+        ),
+      ) : null,
+      child: Stack(
+        children: [
+          ClipRRect(
+            borderRadius: BorderRadius.circular(12),
+            child: Hero(
+              tag: heroTag,
+              child: Opacity(
+                opacity: progress < 1.0 ? 0.6 : 1.0,
+                child: Image.file(
+                  File(imagePath),
+                  width: 200,
+                  height: 200,
+                  fit: BoxFit.cover,
+                  errorBuilder: (ctx, err, st) => const Icon(Icons.broken_image_rounded, color: Colors.white54, size: 48),
+                ),
+              ),
+            ),
+          ),
+          if (progress < 1.0)
+            Positioned.fill(
+              child: Center(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    CircularProgressIndicator(
+                      value: progress > 0 ? progress : null,
+                      color: Colors.white,
+                      strokeWidth: 3,
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      '${(progress * 100).toInt()}%',
+                      style: GoogleFonts.inter(
+                        color: Colors.white,
+                        fontSize: 12,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
         ],
       ),
     );

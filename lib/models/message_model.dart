@@ -1,4 +1,4 @@
-enum MessageType { text, sos, audio }
+enum MessageType { text, sos, audio, image }
 
 enum MessageStatus { sending, sent, delivered, read, failed, queued, relay }
 
@@ -18,6 +18,7 @@ class Message {
   final bool isFileAccepted;
   final DateTime? expiresAt;
   final bool isBurned;
+  final String? imagePath;
 
   Message({
     required this.id,
@@ -35,6 +36,7 @@ class Message {
     this.isFileAccepted = false,
     this.expiresAt,
     this.isBurned = false,
+    this.imagePath,
   });
 
   Map<String, dynamic> toMap() {
@@ -54,6 +56,7 @@ class Message {
       'isFileAccepted': isFileAccepted ? 1 : 0,
       'expiresAt': expiresAt?.toIso8601String(),
       'isBurned': isBurned ? 1 : 0,
+      'imagePath': imagePath,
     };
   }
 
@@ -74,6 +77,7 @@ class Message {
       isFileAccepted: map['isFileAccepted'] == 1,
       expiresAt: map['expiresAt'] != null ? DateTime.parse(map['expiresAt']) : null,
       isBurned: map['isBurned'] == 1,
+      imagePath: map['imagePath'] as String?,
     );
   }
 
@@ -93,6 +97,7 @@ class Message {
     bool? isFileAccepted,
     DateTime? expiresAt,
     bool? isBurned,
+    String? imagePath,
   }) {
     return Message(
       id: id ?? this.id,
@@ -110,6 +115,7 @@ class Message {
       isFileAccepted: isFileAccepted ?? this.isFileAccepted,
       expiresAt: expiresAt ?? this.expiresAt,
       isBurned: isBurned ?? this.isBurned,
+      imagePath: imagePath ?? this.imagePath,
     );
   }
 }

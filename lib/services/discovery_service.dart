@@ -64,9 +64,13 @@ class DiscoveryService {
   String? _localUuid;
   bool _isBrowsing = false;
   bool _isAdvertising = false;
-  
+
   bool get isCurrentlyBrowsing => _isBrowsing;
   bool get isCurrentlyAdvertising => _isAdvertising;
+
+  /// Callback invoked when a direct (non-mesh) peer disconnects.
+  /// Used by ReconnectionManager to trigger an immediate reconnect attempt.
+  void Function(Device)? onDirectDisconnect;
 
   Timer? _refreshTimer;
   int _currentBatteryLevel = 100;
@@ -277,48 +281,28 @@ class DiscoveryService {
             final existingIndex = _devices.indexWhere((d) => d.deviceId == id);
             if (existingIndex >= 0 &&
                 (_devices[existingIndex].state == SessionState.notConnected)) {
-              
-              // Enhanced Exponential Backoff / Adaptive retry logic
-              int retryCount = _devices[existingIndex].retryCount;
-              DateTime? lastRetry = _devices[existingIndex].lastRetry;
-              
-              if (lastRetry != null) {
-                final diff = DateTime.now().difference(lastRetry).inSeconds;
-                // Instant retry on first failure, then aggressive backoff: 0, 5, 20, 60...
-                int waitTime = 0;
-                if (retryCount > 0) {
-                  waitTime = (retryCount == 1 ? 5 : (retryCount == 2 ? 20 : (retryCount == 3 ? 60 : 180)));
-                }
 
-                if (diff < waitTime) {
-                  debugPrint('[DiscoveryService] Throttling reconnect to $displayName. Waiting ${waitTime - diff}s more.');
-                  return;
-                }
-              }
-
-              // Tie-breaker: Only one side initiates to avoid connection collision
-              // We use string comparison of UUIDs as a stable, decentralized way to decide
+              // No throttle: when a known peer is in direct range, reconnect immediately.
+              // Tie-breaker: one side initiates to avoid simultaneous collision.
+              // Nearby resolves collisions gracefully via STATUS_ENDPOINT_IO_ERROR.
               if (_localUuid != null &&
                   _localUuid!.compareTo(discoveredUuid) > 0) {
                 debugPrint(
-                  '[DiscoveryService] Found known device "$displayName" ($discoveredUuid). Tie-breaker WON. Initiating auto-reconnect...',
+                  '[DiscoveryService] Found known device "$displayName" ($discoveredUuid). Tie-breaker WON. Initiating instant reconnect...',
                 );
-                _devices[existingIndex].lastRetry = DateTime.now();
-                _devices[existingIndex].retryCount++;
                 connect(_devices[existingIndex]);
               } else {
                 debugPrint(
-                  '[DiscoveryService] Found known device "$displayName" ($discoveredUuid). Tie-breaker LOST. Waiting for peer to initiate...',
+                  '[DiscoveryService] Found known device "$displayName" ($discoveredUuid). Tie-breaker LOST. Waiting 100ms for peer...',
                 );
-                // Extreme fallback delay of 500ms for "instant" feel
-                Future.delayed(const Duration(milliseconds: 500), () {
+                // Short fallback: if peer hasn't connected in 100ms, both try simultaneously.
+                // Nearby handles the collision — no harm in both sides initiating.
+                Future.delayed(const Duration(milliseconds: 100), () {
                   final idx = _devices.indexWhere((d) => d.deviceId == id);
                   if (idx >= 0 && _devices[idx].state == SessionState.notConnected) {
                     debugPrint(
-                      '[DiscoveryService] Peer did not connect within fallback timeout. Initiating connection as manual fallback...',
+                      '[DiscoveryService] Peer did not connect within 100ms. Initiating as fallback...',
                     );
-                    _devices[idx].lastRetry = DateTime.now();
-                    _devices[idx].retryCount++;
                     connect(_devices[idx]);
                   }
                 });
@@ -461,14 +445,19 @@ class DiscoveryService {
         },
         onDisconnected: (id) {
           final startTime = _connectionStartTimes.remove(id);
+          final droppedDevice = getDeviceById(id);
           if (startTime != null) {
             final duration = DateTime.now().difference(startTime).inMinutes;
-            final uuid = getDeviceById(id)?.uuid;
+            final uuid = droppedDevice?.uuid;
             if (uuid != null) {
               _reputationService.recordConnectionEvent(uuid, true, durationMinutes: duration);
             }
           }
           updateDeviceState(id, SessionState.notConnected);
+          // Notify ReconnectionManager immediately for instant re-attempt
+          if (droppedDevice != null && !droppedDevice.isMesh) {
+            onDirectDisconnect?.call(droppedDevice);
+          }
         },
       );
     } catch (e) {
@@ -598,14 +587,19 @@ class DiscoveryService {
         },
         onDisconnected: (id) {
           final startTime = _connectionStartTimes.remove(id);
+          final droppedDevice = getDeviceById(id);
           if (startTime != null) {
             final duration = DateTime.now().difference(startTime).inMinutes;
-            final uuid = getDeviceById(id)?.uuid;
+            final uuid = droppedDevice?.uuid;
             if (uuid != null) {
               _reputationService.recordConnectionEvent(uuid, true, durationMinutes: duration);
             }
           }
           updateDeviceState(id, SessionState.notConnected);
+          // Notify ReconnectionManager immediately for instant re-attempt
+          if (droppedDevice != null && !droppedDevice.isMesh) {
+            onDirectDisconnect?.call(droppedDevice);
+          }
         },
       );
     } catch (e) {

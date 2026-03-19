@@ -54,6 +54,18 @@ class HeartbeatManager {
   HeartbeatManager({required DiscoveryService discoveryService})
       : _discoveryService = discoveryService;
 
+  /// UUIDs of peers that are in our saved contacts/known list.
+  /// Ghost-eviction (active disconnect) is suppressed for known peers — if the
+  /// socket is dead the OS will surface it; if it's a momentary glitch we don't
+  /// want to force a reconnect cycle on a peer that is physically in range.
+  final Set<String> knownUuids = {};
+
+  void setKnownUuids(Iterable<String> uuids) {
+    knownUuids
+      ..clear()
+      ..addAll(uuids);
+  }
+
   /// Start the adaptive heartbeat monitoring loop.
   void startMonitoring() {
     if (_isActive) return;
@@ -118,13 +130,28 @@ class HeartbeatManager {
           'Ghost connection detected: ${peer.deviceName} (${peer.uuid}) — $misses missed pings',
         );
         _heartbeatMisses.remove(peer.uuid);
-        _discoveryService.disconnect(peer);
 
-        _eventController.add(HeartbeatEvent(
-          uuid: peer.uuid!,
-          deviceName: peer.deviceName,
-          type: HeartbeatEventType.peerLost,
-        ));
+        if (knownUuids.contains(peer.uuid)) {
+          // Known peer: don't force-disconnect. The OS-level socket drop will
+          // surface naturally. Resetting the miss counter gives it a fresh window.
+          ConnectivityLogger.info(
+            LogCategory.heartbeat,
+            'Known peer ${peer.deviceName} — skipping active disconnect to avoid churn',
+          );
+          _eventController.add(HeartbeatEvent(
+            uuid: peer.uuid!,
+            deviceName: peer.deviceName,
+            type: HeartbeatEventType.peerDegraded,
+            data: {'missedPings': misses, 'suppressed': true},
+          ));
+        } else {
+          _discoveryService.disconnect(peer);
+          _eventController.add(HeartbeatEvent(
+            uuid: peer.uuid!,
+            deviceName: peer.deviceName,
+            type: HeartbeatEventType.peerLost,
+          ));
+        }
         continue;
       }
 

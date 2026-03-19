@@ -25,7 +25,7 @@ class DatabaseHelper {
 
     return await openDatabase(
       path,
-      version: 16,
+      version: 17,
       onCreate: _createDB,
       onUpgrade: _upgradeDB,
     );
@@ -59,7 +59,8 @@ class DatabaseHelper {
         progress REAL,
         isFileAccepted INTEGER NOT NULL DEFAULT 0,
         expiresAt TEXT,
-        isBurned INTEGER NOT NULL DEFAULT 0
+        isBurned INTEGER NOT NULL DEFAULT 0,
+        imagePath TEXT
       )
     ''');
 
@@ -213,6 +214,13 @@ class DatabaseHelper {
           await db.execute('ALTER TABLE peer_reputation ADD COLUMN consensus_count INTEGER NOT NULL DEFAULT 0');
         } catch (e) {
           // Table might have been created fresh in version 16
+        }
+      }
+      if (oldVersion < 17) {
+        try {
+          await db.execute('ALTER TABLE ${AppConstants.messageTable} ADD COLUMN imagePath TEXT');
+        } catch (e) {
+          // Column may already exist
         }
       }
     }

@@ -42,6 +42,7 @@ void main() {
       discoveryService: discovery,
       messagingService: messaging,
       reconnectionManager: reconnection,
+      heartbeatManager: heartbeat,
       connectivityStateMonitor: stateMonitor,
       messageQueueManager: messageQueue,
       reputationService: reputation,
