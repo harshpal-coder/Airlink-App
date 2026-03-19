@@ -4,7 +4,6 @@ import 'package:google_fonts/google_fonts.dart';
 import '../../services/chat_provider.dart';
 import '../../models/group_model.dart';
 import '../../models/chat_model.dart';
-import '../../models/session_state.dart';
 import '../../core/constants.dart';
 
 class GroupInfoScreen extends StatefulWidget {
