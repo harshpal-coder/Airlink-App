@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'dart:io';
 import '../../core/constants.dart';
 import 'chat_list_screen.dart';
@@ -10,6 +11,7 @@ import '../../services/chat_provider.dart';
 import '../../utils/background_utils.dart';
 import 'package:provider/provider.dart';
 import 'dart:async';
+import 'package:permission_handler/permission_handler.dart';
 
 class MainScreen extends StatefulWidget {
   const MainScreen({super.key});
@@ -39,7 +41,16 @@ class _MainScreenState extends State<MainScreen> {
         _showEmergencySOS(alert);
       });
       _checkBatteryOptimizations();
+      _checkOverlayPermission();
     });
+  }
+
+  Future<void> _checkOverlayPermission() async {
+    if (Platform.isAndroid) {
+      if (!await Permission.systemAlertWindow.isGranted) {
+        await Permission.systemAlertWindow.request();
+      }
+    }
   }
 
   Future<void> _checkBatteryOptimizations() async {
@@ -71,9 +82,19 @@ class _MainScreenState extends State<MainScreen> {
     super.dispose();
   }
 
-  void _showEmergencySOS(Map<String, dynamic> alert) {
+  Future<void> _showEmergencySOS(Map<String, dynamic> alert) async {
     if (!mounted) return;
     
+    if (Platform.isAndroid) {
+      try {
+        const foregroundChannel = MethodChannel('com.airlink/foreground');
+        await foregroundChannel.invokeMethod('bringToForeground');
+      } catch (e) {
+        debugPrint('[SOS] Error bringing to foreground: $e');
+      }
+    }
+
+    if (!mounted) return;
     showDialog(
       context: context,
       barrierDismissible: false,

@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
+import 'dart:ui';
+import 'dart:isolate';
 import 'package:provider/provider.dart';
 import 'core/theme.dart';
 import 'core/constants.dart';
@@ -174,6 +176,28 @@ void main() async {
   bgService.on('connectivity_restore').listen((_) async {
     ConnectivityLogger.info(LogCategory.background, 'Connectivity restore triggered');
     await discoveryService.restoreDiscoveryState();
+  });
+
+  // ── Notification Action Reply Port ──
+  final ReceivePort notificationReceivePort = ReceivePort();
+  IsolateNameServer.removePortNameMapping('notification_reply_port');
+  IsolateNameServer.registerPortWithName(notificationReceivePort.sendPort, 'notification_reply_port');
+  
+  notificationReceivePort.listen((message) async {
+    try {
+      if (message is Map<String, dynamic>) {
+        final String peerUuid = message['peerUuid'];
+        final String replyText = message['text'];
+        
+        final chat = await DatabaseHelper.instance.getChatByPeerUuid(peerUuid);
+        final peerName = chat?.peerName ?? 'Unknown';
+        
+        debugPrint('[Main] Received notification reply to send to $peerName ($peerUuid): $replyText');
+        await messagingService.sendTextMessage(peerUuid, peerName, replyText);
+      }
+    } catch (e) {
+      debugPrint('[Main] Error handling notification reply: $e');
+    }
   });
 
   runApp(MyApp(

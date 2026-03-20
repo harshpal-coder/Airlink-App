@@ -206,6 +206,18 @@ class SettingsScreen extends StatelessWidget {
                     ),
                   ]),
                   const SizedBox(height: 32),
+                  _buildSectionHeader('Appearance'),
+                  const SizedBox(height: 12),
+                  _buildSettingsCard([
+                    _buildSettingsTile(
+                      context,
+                      Icons.wallpaper_rounded,
+                      'Chat Wallpaper',
+                      chatProvider.chatWallpaperPath != null ? 'Custom wallpaper set' : 'Default texture',
+                      onTap: () => _showWallpaperOptions(context, chatProvider),
+                    ),
+                  ]),
+                  const SizedBox(height: 32),
                   _buildSectionHeader('Stability & Battery'),
                   const SizedBox(height: 12),
                   _buildSettingsCard([
@@ -752,6 +764,113 @@ class SettingsScreen extends StatelessWidget {
           ),
         ),
       ],
+    );
+  }
+
+  void _showWallpaperOptions(BuildContext context, ChatProvider provider) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (context) {
+        return Container(
+          padding: const EdgeInsets.all(24),
+          decoration: const BoxDecoration(
+            color: AppColors.surfaceDark,
+            borderRadius: BorderRadius.vertical(top: Radius.circular(32)),
+          ),
+          child: SafeArea(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 40,
+                  height: 4,
+                  margin: const EdgeInsets.only(bottom: 24),
+                  decoration: BoxDecoration(
+                    color: Colors.white24,
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+                Text(
+                  'Chat Wallpaper',
+                  style: GoogleFonts.outfit(
+                    fontSize: 20,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.white,
+                  ),
+                ),
+                const SizedBox(height: 24),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                  children: [
+                    _buildWallpaperOption(
+                      context,
+                      Icons.photo_library_rounded,
+                      'Gallery',
+                      () async {
+                        final picker = ImagePicker();
+                        final XFile? image = await picker.pickImage(source: ImageSource.gallery);
+                        if (image != null) {
+                          provider.updateChatWallpaper(image.path);
+                        }
+                        Navigator.pop(context);
+                      },
+                    ),
+                    _buildWallpaperOption(
+                      context,
+                      Icons.restart_alt_rounded,
+                      'Default',
+                      () {
+                        provider.updateChatWallpaper(null);
+                        Navigator.pop(context);
+                      },
+                      isDestructive: true,
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 16),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildWallpaperOption(
+    BuildContext context,
+    IconData icon,
+    String label,
+    VoidCallback onTap, {
+    bool isDestructive = false,
+  }) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Column(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(20),
+            decoration: BoxDecoration(
+              color: AppColors.surfaceElevated,
+              borderRadius: BorderRadius.circular(24),
+              border: Border.all(color: Colors.white.withValues(alpha: 0.05)),
+            ),
+            child: Icon(
+              icon,
+              color: isDestructive ? Colors.redAccent : AppColors.primaryLight,
+              size: 32,
+            ),
+          ),
+          const SizedBox(height: 12),
+          Text(
+            label,
+            style: GoogleFonts.inter(
+              color: Colors.white,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

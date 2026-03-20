@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math';
 import '../models/device_model.dart';
 import '../models/session_state.dart';
 import '../utils/connectivity_logger.dart';
@@ -42,14 +43,22 @@ class ReconnectionManager {
   /// Ultra-aggressive backoff schedule in seconds: 0 (immediate), 1, 3, 7, 15, 30
   static const List<int> _backoffSchedule = [0, 1, 3, 7, 15, 30];
 
-  /// Maximum number of reconnection attempts before giving up.
+  /// Maximum number of reconnection attempts before giving up (or switching to monitoring).
   static const int _maxAttempts = 15;
+
+  /// Reputation score above which we keep trying indefinitely (Long-term Monitoring).
+  static const double _minHighReputationScore = 70.0;
+
+  /// Interval for long-term monitoring of stable but currently missing peers.
+  static const Duration _longTermMonitoringInterval = Duration(minutes: 5);
 
   /// Tracks active reconnection state per device UUID.
   final Map<String, _ReconnectState> _activeReconnections = {};
 
   final _eventController = StreamController<ReconnectEvent>.broadcast();
   Stream<ReconnectEvent> get events => _eventController.stream;
+
+  final _random = Random();
 
   /// Timers waiting for onConnectionResult to fire after a connect() call.
   /// If the callback fires first, the timer is cancelled. If not, we schedule
@@ -72,6 +81,30 @@ class ReconnectionManager {
       );
       scheduleReconnect(device);
     };
+    
+    // Periodically sync known devices (every 2 mins) to catch devices that 
+    // were never connected in this session but are in the "Known" list.
+    Timer.periodic(const Duration(minutes: 2), (_) => _syncKnownDevices());
+    _syncKnownDevices(); // Initial sync
+  }
+
+  void _syncKnownDevices() {
+    final known = _discoveryService.knownDevices;
+    for (var entry in known.entries) {
+      final uuid = entry.key;
+      final name = entry.value;
+      
+      final device = _discoveryService.getDeviceByUuid(uuid);
+      if (device != null && device.state == SessionState.notConnected) {
+        if (!_activeReconnections.containsKey(uuid)) {
+           ConnectivityLogger.debug(
+             LogCategory.reconnection,
+             'Proactive sync: scheduling reconnect for known device $name ($uuid)',
+           );
+           scheduleReconnect(device);
+        }
+      }
+    }
   }
 
   /// Schedule a reconnection attempt for a device.
@@ -118,14 +151,37 @@ class ReconnectionManager {
     }
   }
 
-  void _scheduleNextAttempt(String uuid) {
+  Future<void> _scheduleNextAttempt(String uuid) async {
     final state = _activeReconnections[uuid];
     if (state == null) return;
 
+    // Check reputation to see if we should give up or switch to long-term monitoring
+    final reputation = await _reputationService.getReputation(uuid);
+    final score = (reputation?['composite_score'] as num?)?.toDouble() ?? 50.0;
+
     if (state.attemptCount >= _maxAttempts) {
+      if (score >= _minHighReputationScore) {
+        ConnectivityLogger.info(
+          LogCategory.reconnection,
+          'Switching to long-term monitoring (every 5m) for stable peer ${state.device.deviceName} (Score: ${score.toStringAsFixed(1)})',
+        );
+        
+        state.timer?.cancel();
+        state.timer = Timer(_longTermMonitoringInterval, () => _attemptReconnect(uuid));
+        
+        _eventController.add(ReconnectEvent(
+          uuid: uuid,
+          deviceName: state.device.deviceName,
+          type: ReconnectEventType.scheduled,
+          attemptNumber: state.attemptCount,
+          nextRetryIn: _longTermMonitoringInterval,
+        ));
+        return;
+      }
+
       ConnectivityLogger.warning(
         LogCategory.reconnection,
-        'Giving up on ${state.device.deviceName} after ${state.attemptCount} attempts',
+        'Giving up on ${state.device.deviceName} after ${state.attemptCount} attempts (Score: ${score.toStringAsFixed(1)})',
       );
       _eventController.add(ReconnectEvent(
         uuid: uuid,
@@ -137,14 +193,35 @@ class ReconnectionManager {
       return;
     }
 
-    // Calculate delay using backoff schedule
+    // Calculate delay using backoff schedule + Reputation Multiplier
+    // If score is very high (>80), we can retry slightly faster
+    double multiplier = 1.0;
+    if (score >= 85) {
+      multiplier = 0.7; // 30% faster retries for highly stable peers
+    } else if (score < 40) {
+      multiplier = 1.5; // 50% slower retries for unstable peers
+    }
+
     final backoffIndex = state.attemptCount.clamp(0, _backoffSchedule.length - 1);
-    final delaySeconds = _backoffSchedule[backoffIndex];
-    final delay = Duration(seconds: delaySeconds);
+    var delaySeconds = (_backoffSchedule[backoffIndex] * multiplier).round();
+    
+    // For the very first attempt (0s), add a small sub-second jitter to prevent collisions
+    int delayMillis = delaySeconds * 1000;
+    if (state.attemptCount == 0) {
+      delayMillis = _random.nextInt(800); // 0-800ms jitter
+    }
+
+    // Add jitter (±15% or min 1s) to avoid collisions for subsequent attempts
+    final jitter = (delaySeconds * 0.15).round();
+    if (jitter > 0) {
+      delayMillis += (_random.nextInt(jitter * 2) - jitter) * 1000;
+    }
+    
+    final delay = Duration(milliseconds: max(0, delayMillis));
 
     ConnectivityLogger.info(
       LogCategory.reconnection,
-      'Scheduling reconnect to ${state.device.deviceName} in ${delaySeconds}s (attempt ${state.attemptCount + 1}/$_maxAttempts)',
+      'Scheduling reconnect to ${state.device.deviceName} in ${delay.inSeconds}s (attempt ${state.attemptCount + 1}/$_maxAttempts, score: ${score.toStringAsFixed(1)})',
     );
 
     _eventController.add(ReconnectEvent(
@@ -205,13 +282,20 @@ class ReconnectionManager {
     ));
 
     try {
+      // Boost discovery radio temporarily if this is a high-priority peer
+      final reputation = await _reputationService.getReputation(uuid);
+      final score = (reputation?['composite_score'] as num?)?.toDouble() ?? 50.0;
+      if (score >= _minHighReputationScore) {
+        _discoveryService.boostDiscovery();
+      }
+
       await _discoveryService.connect(device);
 
       // Don't poll state — onConnectionResult fires the callback which calls
       // onConnectionRestored(). We set a 2s safety timeout in case the callback
       // never arrives (e.g. the platform swallows the result).
       _pendingConnectionTimers[uuid]?.cancel();
-      _pendingConnectionTimers[uuid] = Timer(const Duration(seconds: 2), () {
+      _pendingConnectionTimers[uuid] = Timer(const Duration(seconds: 4), () { // Increased to 4s for reliability
         _pendingConnectionTimers.remove(uuid);
         // Only retry if we're still not connected
         final check = _discoveryService.getDeviceByUuid(uuid);
@@ -219,7 +303,7 @@ class ReconnectionManager {
           _reputationService.recordConnectionEvent(uuid, false);
           ConnectivityLogger.debug(
             LogCategory.reconnection,
-            'No connection result within 2s for ${device.deviceName}. Scheduling next attempt.',
+            'No connection result within 4s for ${device.deviceName}. Scheduling next attempt.',
           );
           _eventController.add(ReconnectEvent(
             uuid: uuid,

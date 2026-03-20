@@ -7,6 +7,7 @@ import 'package:uuid/uuid.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as p;
 import 'package:flutter/foundation.dart';
+import 'package:flutter/widgets.dart';
 import 'package:battery_plus/battery_plus.dart';
 import 'package:audioplayers/audioplayers.dart';
 
@@ -358,7 +359,16 @@ class MessagingService {
         return;
       }
 
-      // 2. Check deduplication
+      // 2. Update Discovery state if we receive data from a peer (Self-Healing)
+      if (originalSenderUuid != null && senderId != originalSenderUuid) {
+        final device = discoveryService.getDeviceByUuid(originalSenderUuid);
+        if (device != null && device.state != SessionState.connected) {
+          debugPrint('[MessagingService] Self-Healing: Data received from $originalSenderUuid. Marking as connected.');
+          discoveryService.updateDeviceState(senderId, SessionState.connected);
+        }
+      }
+
+      // 3. Check deduplication
       if (messageId != null) {
         if (_processedMessageIds.contains(messageId)) return;
         _processedMessageIds.add(messageId);
@@ -851,6 +861,7 @@ class MessagingService {
       senderName: chat?.peerName ?? senderName,
       senderProfileImage: chat?.peerProfileImage,
     );
+    _playMessageSound(true, senderUuid: senderUuid ?? senderEndpointId);
   }
 
 
@@ -914,6 +925,7 @@ class MessagingService {
     await dbHelper.insertMessage(message);
     await _updateChatRecord(receiverUuid, content, message.timestamp, 0, peerName: receiverName);
     _messageUpdatedController.sink.add(null);
+    _playMessageSound(false);
 
     try {
       final device = discoveryService.getDeviceByUuid(receiverUuid);
@@ -923,8 +935,11 @@ class MessagingService {
         if (payloadId != null) {
           _payloadToMessageId[payloadId] = messageId;
           await dbHelper.updateMessagePayloadId(messageId, payloadId);
+          await dbHelper.updateMessageStatus(messageId, MessageStatus.sent);
+        } else {
+          // If direct send failed at high-level, mark as failed (or queued if you want to retry)
+          await dbHelper.updateMessageStatus(messageId, MessageStatus.failed);
         }
-        await dbHelper.updateMessageStatus(messageId, MessageStatus.sent);
       } else {
         // Mesh Send
         final String? nextHopEndpointId = await _findNextHop(receiverUuid);
@@ -1007,6 +1022,7 @@ class MessagingService {
     
     await dbHelper.insertMessage(message);
     _messageUpdatedController.sink.add(receiverUuid);
+    _playMessageSound(false);
 
     await _relayMessage(receiverUuid, payload);
     
@@ -1060,6 +1076,7 @@ class MessagingService {
         senderUuid: senderUuid ?? senderEndpointId,
         senderName: senderName ?? 'Peer',
       );
+      _playMessageSound(true, senderUuid: senderUuid ?? senderEndpointId);
     } catch (e) {
       debugPrint('[MessagingService] Error processing incoming audio: $e');
     }
@@ -1126,6 +1143,7 @@ class MessagingService {
     await dbHelper.insertMessage(message);
     await _updateChatRecord(receiverUuid, '📷 Image', message.timestamp, 0, peerName: receiverName);
     _messageUpdatedController.sink.add(receiverUuid);
+    _playMessageSound(false);
 
     final int? payloadId = await _relayMessage(receiverUuid, payload);
     if (payloadId != null) {
@@ -1177,6 +1195,7 @@ class MessagingService {
     await dbHelper.insertMessage(message);
     await _updateGroupRecord(groupId, '${me?.deviceName ?? 'You'}: 📷 Image', message.timestamp, 0, name: groupName);
     _messageUpdatedController.sink.add(null);
+    _playMessageSound(false);
 
     final payloadJson = json.encode(payload);
     final neighbors = discoveryService.getConnectedDevices();
@@ -1246,6 +1265,7 @@ class MessagingService {
         senderUuid: effectiveSender,
         senderName: senderName ?? 'Peer',
       );
+      _playMessageSound(true, senderUuid: effectiveSender);
     } catch (e) {
       debugPrint('[MessagingService] Error processing incoming image: $e');
     }
@@ -1298,6 +1318,7 @@ class MessagingService {
         senderUuid: groupId,
         senderName: group?.name,
       );
+      _playMessageSound(true, senderUuid: groupId);
     } catch (e) {
       debugPrint('[MessagingService] Error processing incoming group image: $e');
     }
@@ -1564,6 +1585,7 @@ class MessagingService {
     await dbHelper.insertMessage(message);
     await _updateGroupRecord(groupId, content, message.timestamp, 0, name: groupName);
     _messageUpdatedController.sink.add(null);
+    _playMessageSound(false);
 
     // Broadcast to all neighbors for mesh propagation
     final payloadJson = json.encode(payload);
@@ -1657,6 +1679,7 @@ class MessagingService {
       senderUuid: groupId,
       senderName: group?.name,
     );
+    _playMessageSound(true, senderUuid: groupId); // Call site updated
 
     // Re-relay for mesh
     // We don't want to re-relay what we just received if we already processed it (messageId check is earlier)
@@ -1673,6 +1696,27 @@ class MessagingService {
       name: name ?? group.name,
     );
     await dbHelper.insertGroup(updatedGroup);
+  }
+
+  Future<void> _playMessageSound(bool isIncoming, {String? senderUuid}) async {
+    try {
+      // 1. Only play if app is in foreground
+      if (WidgetsBinding.instance.lifecycleState != AppLifecycleState.resumed) return;
+
+      // 2. Only play incoming sound if we are in the active chat with this sender
+      if (isIncoming) {
+        if (senderUuid == null || NotificationService.activeChatUuid != senderUuid) {
+          debugPrint('[MessagingService] Suppressing incoming sound: chat not active or background.');
+          return;
+        }
+      }
+
+      // If we are currently playing something, stop it first to allow new sound to trigger instantly
+      await _player.stop();
+      await _player.play(AssetSource(isIncoming ? 'audio/message_received.mp3' : 'audio/message_sent.mp3'));
+    } catch (e) {
+      debugPrint('[MessagingService] Error playing sound: $e');
+    }
   }
 
   Future<int?> sendMessageToEndpoint(String endpointId, String message) async {

@@ -32,7 +32,7 @@ class DiscoveryService {
   Strategy strategy =
       Strategy.P2P_CLUSTER; // Using P2P_CLUSTER for mesh-like connectivity
 
-  static const int _targetDirectPeers = 3; // Target number of simultaneous direct connections
+  static const int _targetDirectPeers = 6; // Target number of simultaneous direct connections (Hardware/API limit is ~10)
 
   final _discoveredDevicesController =
       StreamController<List<Device>>.broadcast();
@@ -71,6 +71,14 @@ class DiscoveryService {
   /// Callback invoked when a direct (non-mesh) peer disconnects.
   /// Used by ReconnectionManager to trigger an immediate reconnect attempt.
   void Function(Device)? onDirectDisconnect;
+
+  /// Callback invoked when a reconnection effort needs more aggressive scanning.
+  void Function()? onBoostDiscovery;
+
+  void boostDiscovery() {
+    ConnectivityLogger.debug(LogCategory.discovery, 'Reconnection manager requested discovery boost');
+    onBoostDiscovery?.call();
+  }
 
   Timer? _refreshTimer;
   int _currentBatteryLevel = 100;
@@ -119,26 +127,9 @@ class DiscoveryService {
           'Periodic refresh: Restarting browsing/advertising...');
       if (_isBrowsing) await startBrowsing(forceRestart: true);
       if (_isAdvertising) await startAdvertising(forceRestart: true);
-
-      // Also trigger a background reconnect check for known devices
-      _checkBackgroundReconnections();
   }
 
-  void _checkBackgroundReconnections() {
-    debugPrint('[DiscoveryService] Checking for background reconnections...');
-    for (var entry in _knownDevices.entries) {
-      final uuid = entry.key;
-      final name = entry.value;
-
-      // If we don't have this device in our lists or it's not connected, try to find/connect
-      final device = getDeviceByUuid(uuid);
-      if (device != null && device.state == SessionState.notConnected) {
-        debugPrint(
-            '[DiscoveryService] Background recon: Attempting to reconnect to $name ($uuid)');
-        connect(device);
-      }
-    }
-  }
+  Map<String, String> get knownDevices => _knownDevices;
 
   void setKnownDevices(List<Map<String, String>> devices) {
     _knownDevices = {for (var d in devices) d['uuid']!: d['name']!};
@@ -487,9 +478,19 @@ class DiscoveryService {
     if (device.state == SessionState.connecting ||
         device.state == SessionState.connected) {
       debugPrint(
-        '[DiscoveryService] Already connecting/connected to ${device.deviceName}. Skipping.',
+        '[DiscoveryService] Already connecting/connected to ${device.deviceName} (${device.uuid ?? device.deviceId}). Skipping.',
       );
       return;
+    }
+
+    // Double check by UUID to prevent redundant connections to the same peer via different IDs
+    if (device.uuid != null) {
+      final existing = getDeviceByUuid(device.uuid!);
+      if (existing != null && (existing.state == SessionState.connected || existing.state == SessionState.connecting)) {
+         debugPrint('[DiscoveryService] Already have an active session with UUID ${device.uuid}. Skipping connect to ${device.deviceId}.');
+         updateDeviceState(device.deviceId, existing.state);
+         return;
+      }
     }
 
     debugPrint(

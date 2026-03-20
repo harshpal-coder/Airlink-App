@@ -75,6 +75,9 @@ class ChatProvider extends ChangeNotifier with WidgetsBindingObserver {
   bool get isRecording => _isRecording;
   String? _recordingPath;
 
+  String? _chatWallpaperPath;
+  String? get chatWallpaperPath => _chatWallpaperPath;
+
   void _updateMeshStats() {
     final Set<String> allUuids = {};
     final connected = discoveryService.getConnectedDevices();
@@ -284,6 +287,18 @@ class ChatProvider extends ChangeNotifier with WidgetsBindingObserver {
     // Defaulting to true: "Invisible Mode" OFF (Visible) and "Auto Discovery" ON
     isBrowsing = prefs.getBool('isBrowsing') ?? true;
     isAdvertising = prefs.getBool('isAdvertising') ?? true;
+    _chatWallpaperPath = prefs.getString('chatWallpaperPath');
+    notifyListeners();
+  }
+
+  Future<void> updateChatWallpaper(String? path) async {
+    _chatWallpaperPath = path;
+    final prefs = await SharedPreferences.getInstance();
+    if (path == null) {
+      await prefs.remove('chatWallpaperPath');
+    } else {
+      await prefs.setString('chatWallpaperPath', path);
+    }
     notifyListeners();
   }
 

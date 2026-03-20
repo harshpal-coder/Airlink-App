@@ -36,6 +36,10 @@ class AdaptiveDiscoveryManager {
   Future<void> start() async {
     await _loadState();
     _adaptationTimer?.cancel();
+    
+    // Wire up boost callback
+    _discoveryService.onBoostDiscovery = _boost;
+    
     // Rule: Every 15 mins, evaluate and choose a new arm
     _adaptationTimer = Timer.periodic(const Duration(minutes: 15), (_) => _step());
     _step(); // Initial step
@@ -124,5 +128,20 @@ class AdaptiveDiscoveryManager {
       case DiscoveryArm.hibernate: interval = const Duration(minutes: 15); break;
     }
     _discoveryService.updateRefreshInterval(interval);
+  }
+
+  void _boost() {
+    // If already in ultra-aggressive, no need to do anything
+    if (_currentArm == DiscoveryArm.ultraAggressive) return;
+
+    ConnectivityLogger.info(
+      LogCategory.discovery,
+      '[Battery AI] Boosting discovery mode to ultraAggressive for reconnection',
+    );
+    _currentArm = DiscoveryArm.ultraAggressive;
+    _applyArm(_currentArm);
+    
+    // We don't reset the timer here; we'll stay in ultraAggressive until the next 
+    // 15-minute evaluation period, which is a good "burst" window.
   }
 }

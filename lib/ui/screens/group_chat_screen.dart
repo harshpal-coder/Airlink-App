@@ -150,15 +150,30 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
           ),
         ),
       ),
-      body: Container(
-        decoration: BoxDecoration(
-          color: AppColors.bgDark,
-          image: DecorationImage(
-            image: const NetworkImage('https://www.transparenttextures.com/patterns/cubes.png'),
-            repeat: ImageRepeat.repeat,
-            colorFilter: ColorFilter.mode(Colors.white.withValues(alpha: 0.03), BlendMode.srcOver),
-          ),
-        ),
+      body: Consumer<ChatProvider>(
+        builder: (context, provider, child) {
+          final wallpaperPath = provider.chatWallpaperPath;
+          return Container(
+            decoration: BoxDecoration(
+              color: AppColors.bgDark,
+              image: wallpaperPath != null && File(wallpaperPath).existsSync()
+                  ? DecorationImage(
+                      image: FileImage(File(wallpaperPath)),
+                      fit: BoxFit.cover,
+                      colorFilter: ColorFilter.mode(
+                        Colors.black.withValues(alpha: 0.4),
+                        BlendMode.darken,
+                      ),
+                    )
+                  : DecorationImage(
+                      image: const NetworkImage('https://www.transparenttextures.com/patterns/cubes.png'),
+                      repeat: ImageRepeat.repeat,
+                      colorFilter: ColorFilter.mode(Colors.white.withValues(alpha: 0.03), BlendMode.srcOver),
+                    ),
+            ),
+            child: child,
+          );
+        },
         child: Column(
           children: [
             Expanded(
