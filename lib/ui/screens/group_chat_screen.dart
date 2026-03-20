@@ -232,13 +232,65 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                     style: GoogleFonts.inter(fontSize: 15, color: Colors.white, height: 1.4),
                   ),
           ),
-          const SizedBox(height: 4),
-          Text(
-            DateFormat('hh:mm a').format(message.timestamp),
-            style: GoogleFonts.inter(fontSize: 10, color: AppColors.textMuted),
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                DateFormat('hh:mm a').format(message.timestamp),
+                style: GoogleFonts.inter(fontSize: 10, color: AppColors.textMuted),
+              ),
+              if (isMe) ...[
+                const SizedBox(width: 4),
+                _buildStatusIcon(message),
+              ] else if (message.hopCount > 0) ...[
+                const SizedBox(width: 6),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                  decoration: BoxDecoration(
+                    color: AppColors.primary.withValues(alpha: 0.1),
+                    borderRadius: BorderRadius.circular(4),
+                    border: Border.all(color: AppColors.primary.withValues(alpha: 0.2), width: 0.5),
+                  ),
+                  child: Text(
+                    '${message.hopCount} hops',
+                    style: GoogleFonts.inter(fontSize: 9, color: AppColors.primaryLight, fontWeight: FontWeight.w600),
+                  ),
+                ),
+              ],
+            ],
           ),
         ],
       ),
+    );
+  }
+
+  Widget _buildStatusIcon(Message message) {
+    if (message.status == MessageStatus.sending) {
+      return const SizedBox(
+        width: 10,
+        height: 10,
+        child: CircularProgressIndicator(strokeWidth: 1.5, color: AppColors.primaryLight),
+      );
+    }
+    if (message.status == MessageStatus.relay) {
+      return Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            'Relaying via ${message.relayedVia ?? 'Mesh'}',
+            style: GoogleFonts.inter(fontSize: 9, color: AppColors.primaryLight, fontWeight: FontWeight.bold),
+          ),
+          const SizedBox(width: 2),
+          const Icon(Icons.shortcut, size: 12, color: AppColors.primaryLight),
+        ],
+      );
+    }
+    return Icon(
+      message.status == MessageStatus.sent || message.status == MessageStatus.delivered || message.status == MessageStatus.read
+          ? Icons.done_all
+          : Icons.done,
+      size: 14,
+      color: message.status == MessageStatus.read ? AppColors.success : AppColors.textMuted,
     );
   }
 

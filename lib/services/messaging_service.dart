@@ -244,6 +244,7 @@ class MessagingService {
       final String? targetUuid = payload['targetUuid'] as String?;
       final String? originalSenderUuid = payload['senderUuid'] as String?;
       final String? originalSenderName = payload['senderName'] as String?;
+      final int hopCount = payload['hopCount'] as int? ?? 0;
 
       if (type == 'profile_sync') {
         final profileBase64 = payload['content'] as String?;
@@ -391,7 +392,7 @@ class MessagingService {
       if (targetUuid != null && targetUuid != myUuid) {
         debugPrint('[StoreAndForward] Storing relay message for $targetUuid');
         _addToRelayBuffer(targetUuid, payload);
-        _relayMessage(targetUuid, payload, excludeEndpointId: senderId);
+        await _relayMessage(targetUuid, payload, excludeEndpointId: senderId);
         return;
       }
 
@@ -420,6 +421,7 @@ class MessagingService {
           senderUuid: originalSenderUuid,
           incomingPayloadId: incomingPayloadId,
           expiresAt: expiresAt,
+          hopCount: hopCount,
         );
       } else if (type == 'typing') {
         final bool isTyping = payload['isTyping'] == true;
@@ -447,7 +449,7 @@ class MessagingService {
         });
         
         // Relaying SOS is high priority and uses flooding
-        _relayMessage(targetUuid ?? 'broadcast', payload, excludeEndpointId: senderId);
+        await _relayMessage(targetUuid ?? 'broadcast', payload, excludeEndpointId: senderId);
         
         NotificationService.showSOSAlert(
           originalSenderName ?? senderId,
@@ -488,6 +490,7 @@ class MessagingService {
             senderName: originalSenderName,
             senderUuid: originalSenderUuid,
             incomingPayloadId: incomingPayloadId,
+            hopCount: hopCount,
           );
           
           // Re-relay for mesh propagation (flooding)
@@ -502,10 +505,11 @@ class MessagingService {
           senderUuid: originalSenderUuid,
           incomingPayloadId: incomingPayloadId,
           expiresAt: expiresAt,
+          hopCount: hopCount,
         );
         
         // Relaying audio for mesh
-        _relayMessage(targetUuid ?? 'broadcast', payload, excludeEndpointId: senderId);
+        await _relayMessage(targetUuid ?? 'broadcast', payload, excludeEndpointId: senderId);
       } else if (type == 'image') {
         final String base64Content = payload['content'] as String;
         final String extension = payload['extension'] as String? ?? '.jpg';
@@ -517,8 +521,9 @@ class MessagingService {
           senderUuid: originalSenderUuid,
           incomingPayloadId: incomingPayloadId,
           expiresAt: expiresAt,
+          hopCount: hopCount,
         );
-        _relayMessage(targetUuid ?? 'broadcast', payload, excludeEndpointId: senderId);
+        await _relayMessage(targetUuid ?? 'broadcast', payload, excludeEndpointId: senderId);
       } else if (type == 'group_image') {
         final String? groupId = payload['groupId'];
         final String base64Content = payload['content'] as String;
@@ -532,6 +537,7 @@ class MessagingService {
             senderName: originalSenderName,
             senderUuid: originalSenderUuid,
             incomingPayloadId: incomingPayloadId,
+            hopCount: hopCount,
           );
           _relayMessage('broadcast', payload, excludeEndpointId: senderId);
         }
@@ -723,10 +729,10 @@ class MessagingService {
     return null;
   }
 
-  Future<int?> _relayMessage(String targetUuid, Map<String, dynamic> payload, {String? excludeEndpointId}) async {
+  Future<({int? payloadId, String? nextHopName})> _relayMessage(String targetUuid, Map<String, dynamic> payload, {String? excludeEndpointId}) async {
     int hops = (payload['hopCount'] ?? 0) + 1;
     payload['hopCount'] = hops;
-    if (hops > 12) return null;
+    if (hops > 12) return (payloadId: null, nextHopName: null);
 
     final String updatedPayload = json.encode(payload);
     
@@ -741,7 +747,7 @@ class MessagingService {
           firstPayloadId ??= pid;
         }
       }
-      return firstPayloadId;
+      return (payloadId: firstPayloadId, nextHopName: 'Mesh (Flood)');
     }
 
     // 2. Dijkstra pathfinding for unicast messages
@@ -749,15 +755,17 @@ class MessagingService {
       final String? nextHopEndpointId = await _findNextHop(targetUuid);
       
       if (nextHopEndpointId != null && nextHopEndpointId != excludeEndpointId) {
-        debugPrint('[MeshRelay] Path found for $targetUuid. Next hop: $nextHopEndpointId (hops: $hops)');
-        return await discoveryService.sendMessageToEndpoint(nextHopEndpointId, updatedPayload);
+        final name = discoveryService.getDeviceById(nextHopEndpointId)?.deviceName;
+        debugPrint('[MeshRelay] Path found for $targetUuid. Next hop: $nextHopEndpointId ($name) (hops: $hops)');
+        final pid = await discoveryService.sendMessageToEndpoint(nextHopEndpointId, updatedPayload);
+        return (payloadId: pid, nextHopName: name);
       }
       
       // 3. Buffer for later if no path (Opportunistic Buffering)
       if (hops == 1) { // Only buffer if it's the first hop and no path found
         debugPrint('[MeshRelay] No path for $targetUuid. Buffering message.');
         _opportunisticBuffer.putIfAbsent(targetUuid, () => []).add(payload);
-        return null;
+        return (payloadId: null, nextHopName: null);
       }
       
       debugPrint('[MeshRelay] No path for $targetUuid in topology. Flooding to direct neighbors.');
@@ -794,7 +802,7 @@ class MessagingService {
       final pid = await discoveryService.sendMessageToEndpoint(peer.deviceId, updatedPayload);
       firstFloodPid ??= pid;
     }
-    return firstFloodPid;
+    return (payloadId: firstFloodPid, nextHopName: 'Mesh (Flood)');
   }
 
   Future<void> broadcastSOS({String content = "I need help! Immediate assistance required."}) async {
@@ -826,13 +834,17 @@ class MessagingService {
     _messageUpdatedController.sink.add('broadcast');
 
     // Use _relayMessage to handle the flooding with priority logic
-    _relayMessage('broadcast', payload);
+    final result = await _relayMessage('broadcast', payload);
+    await dbHelper.insertMessage(message.copyWith(
+      status: MessageStatus.relay,
+      relayedVia: result.nextHopName ?? 'Mesh',
+    ));
     
     debugPrint('[SOS] SOS Broadcast initiated via priority flooding');
   }
 
 
-  Future<void> _processIncomingText(String senderEndpointId, String text, {String? senderName, String? senderUuid, int? incomingPayloadId, DateTime? expiresAt}) async {
+  Future<void> _processIncomingText(String senderEndpointId, String text, {String? senderName, String? senderUuid, int? incomingPayloadId, DateTime? expiresAt, int? hopCount}) async {
     final User? me = await dbHelper.getUser('me');
     final String myUuid = me?.uuid ?? 'me';
     final msgId = const Uuid().v4();
@@ -847,6 +859,7 @@ class MessagingService {
       payloadId: incomingPayloadId,
       progress: 1.0,
       expiresAt: expiresAt,
+      hopCount: hopCount ?? 0,
     );
     if (incomingPayloadId != null) _payloadToMessageId[incomingPayloadId] = msgId;
     await dbHelper.insertMessage(message);
@@ -944,9 +957,13 @@ class MessagingService {
         // Mesh Send
         final String? nextHopEndpointId = await _findNextHop(receiverUuid);
         if (nextHopEndpointId != null) {
-          debugPrint('[MeshSend] Sending $messageId via next hop $nextHopEndpointId');
+          final nextHopName = discoveryService.getDeviceById(nextHopEndpointId)?.deviceName;
+          debugPrint('[MeshSend] Sending $messageId via next hop $nextHopEndpointId ($nextHopName)');
           await discoveryService.sendMessageToEndpoint(nextHopEndpointId, payloadObj);
-          await dbHelper.updateMessageStatus(messageId, MessageStatus.relay);
+          await dbHelper.insertMessage(message.copyWith(
+            status: MessageStatus.relay,
+            relayedVia: nextHopName ?? 'Mesh',
+          ));
         } else {
           // No path found, flood to neighbors or queue
           final neighbors = discoveryService.getConnectedDevices();
@@ -955,7 +972,10 @@ class MessagingService {
             for (var neighbor in neighbors) {
               await discoveryService.sendMessageToEndpoint(neighbor.deviceId, payloadObj);
             }
-            await dbHelper.updateMessageStatus(messageId, MessageStatus.relay);
+            await dbHelper.insertMessage(message.copyWith(
+              status: MessageStatus.relay,
+              relayedVia: 'Mesh (Flood)',
+            ));
           } else {
             debugPrint('[MeshSend] Offline. Queuing message $messageId');
             await dbHelper.updateMessageStatus(messageId, MessageStatus.queued);
@@ -1024,14 +1044,18 @@ class MessagingService {
     _messageUpdatedController.sink.add(receiverUuid);
     _playMessageSound(false);
 
-    await _relayMessage(receiverUuid, payload);
+    final result = await _relayMessage(receiverUuid, payload);
     
-    // Update status to sent locally (mesh relay will update further if ACKs are implemented for audio)
-    await dbHelper.updateMessageStatus(messageId, MessageStatus.sent);
+    // Update status to relay locally with next hop info
+    await dbHelper.insertMessage(message.copyWith(
+      status: MessageStatus.relay,
+      relayedVia: result.nextHopName ?? 'Mesh',
+      payloadId: result.payloadId,
+    ));
     _messageUpdatedController.sink.add(receiverUuid);
   }
 
-  Future<void> _processIncomingAudio(String senderEndpointId, String base64Content, {String? senderName, String? senderUuid, int? incomingPayloadId, DateTime? expiresAt}) async {
+  Future<void> _processIncomingAudio(String senderEndpointId, String base64Content, {String? senderName, String? senderUuid, int? incomingPayloadId, DateTime? expiresAt, int? hopCount}) async {
     try {
       final bytes = base64.decode(base64Content);
       final directory = await getApplicationDocumentsDirectory();
@@ -1059,6 +1083,7 @@ class MessagingService {
         payloadId: incomingPayloadId,
         progress: 1.0,
         expiresAt: expiresAt,
+        hopCount: hopCount ?? 0,
       );
       
       if (incomingPayloadId != null) _payloadToMessageId[incomingPayloadId] = msgId;
@@ -1145,13 +1170,20 @@ class MessagingService {
     _messageUpdatedController.sink.add(receiverUuid);
     _playMessageSound(false);
 
-    final int? payloadId = await _relayMessage(receiverUuid, payload);
-    if (payloadId != null) {
-      _payloadToMessageId[payloadId] = messageId;
-      await dbHelper.updateMessagePayloadId(messageId, payloadId);
-      await dbHelper.insertMessage(message.copyWith(status: MessageStatus.sent, payloadId: payloadId));
+    final result = await _relayMessage(receiverUuid, payload);
+    if (result.payloadId != null) {
+      _payloadToMessageId[result.payloadId!] = messageId;
+      await dbHelper.updateMessagePayloadId(messageId, result.payloadId!);
+      await dbHelper.insertMessage(message.copyWith(
+        status: MessageStatus.relay, 
+        payloadId: result.payloadId,
+        relayedVia: result.nextHopName ?? 'Mesh',
+      ));
     } else {
-      await dbHelper.updateMessageStatus(messageId, MessageStatus.sent);
+      await dbHelper.insertMessage(message.copyWith(
+        status: MessageStatus.relay,
+        relayedVia: result.nextHopName ?? 'Mesh',
+      ));
     }
     _messageUpdatedController.sink.add(receiverUuid);
   }
@@ -1223,6 +1255,7 @@ class MessagingService {
     String? senderUuid,
     int? incomingPayloadId,
     DateTime? expiresAt,
+    int? hopCount,
   }) async {
     try {
       final bytes = base64.decode(base64Content);
@@ -1249,6 +1282,7 @@ class MessagingService {
         progress: 1.0,
         imagePath: filePath,
         expiresAt: expiresAt,
+        hopCount: hopCount ?? 0,
       );
 
       if (incomingPayloadId != null) _payloadToMessageId[incomingPayloadId] = msgId;
@@ -1279,6 +1313,7 @@ class MessagingService {
     String? senderName,
     String? senderUuid,
     int? incomingPayloadId,
+    int? hopCount,
   }) async {
     try {
       final bytes = base64.decode(base64Content);
@@ -1302,6 +1337,7 @@ class MessagingService {
         payloadId: incomingPayloadId,
         progress: 1.0,
         imagePath: filePath,
+        hopCount: hopCount ?? 0,
       );
 
       if (incomingPayloadId != null) _payloadToMessageId[incomingPayloadId] = msgId;
@@ -1373,7 +1409,7 @@ class MessagingService {
       if (device != null && device.state == SessionState.connected) {
         await discoveryService.sendMessageToEndpoint(device.deviceId, payloadObj);
       } else {
-        _relayMessage(receiverUuid, json.decode(payloadObj));
+        await _relayMessage(receiverUuid, json.decode(payloadObj));
       }
     } catch (e) {
       debugPrint('[MessagingService] Error sending profile_sync: $e');
@@ -1549,7 +1585,7 @@ class MessagingService {
       if (device != null && device.state == SessionState.connected) {
         await discoveryService.sendMessageToEndpoint(device.deviceId, payload);
       } else {
-        _relayMessage(memberUuid, json.decode(payload));
+        await _relayMessage(memberUuid, json.decode(payload));
       }
     }
     _messageUpdatedController.add(null);
@@ -1621,7 +1657,7 @@ class MessagingService {
 
     for (var memberUuid in group.members) {
       if (memberUuid == myUuid) continue;
-      _relayMessage(memberUuid, json.decode(updatePayload));
+      await _relayMessage(memberUuid, json.decode(updatePayload));
     }
 
     // 2. Send group_invite to new members
@@ -1637,13 +1673,13 @@ class MessagingService {
 
     for (var memberUuid in newMemberUuids) {
       if (group.members.contains(memberUuid)) continue;
-      _relayMessage(memberUuid, json.decode(invitePayload));
+      await _relayMessage(memberUuid, json.decode(invitePayload));
     }
 
     _messageUpdatedController.add(null);
   }
 
-  Future<void> _processIncomingGroupMessage(String senderEndpointId, String groupId, String text, {String? senderName, String? senderUuid, int? incomingPayloadId}) async {
+  Future<void> _processIncomingGroupMessage(String senderEndpointId, String groupId, String text, {String? senderName, String? senderUuid, int? incomingPayloadId, int? hopCount}) async {
     debugPrint('[MessagingService] _processIncomingGroupMessage: from=$senderUuid, group=$groupId, text=$text');
     final msgId = const Uuid().v4();
     final message = Message(
@@ -1657,6 +1693,7 @@ class MessagingService {
       status: MessageStatus.delivered,
       payloadId: incomingPayloadId,
       progress: 1.0,
+      hopCount: hopCount ?? 0,
     );
     
     try {

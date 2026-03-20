@@ -549,6 +549,21 @@ class _MessageBubble extends StatelessWidget {
                     DateFormat('hh:mm a').format(message.timestamp),
                     style: GoogleFonts.inter(fontSize: 10, color: AppColors.textMuted),
                   ),
+                  if (!isMe && message.hopCount > 0) ...[
+                    const SizedBox(width: 6),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                      decoration: BoxDecoration(
+                        color: AppColors.primary.withValues(alpha: 0.1),
+                        borderRadius: BorderRadius.circular(4),
+                        border: Border.all(color: AppColors.primary.withValues(alpha: 0.2), width: 0.5),
+                      ),
+                      child: Text(
+                        '${message.hopCount} hops',
+                        style: GoogleFonts.inter(fontSize: 9, color: AppColors.primaryLight, fontWeight: FontWeight.w600),
+                      ),
+                    ),
+                  ],
                   if (isMe) ...[
                     const SizedBox(width: 4),
                     _buildStatusIcon(message),
@@ -593,7 +608,10 @@ class _MessageBubble extends StatelessWidget {
         return Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Text('Relaying', style: GoogleFonts.inter(fontSize: 9, color: AppColors.primaryLight, fontWeight: FontWeight.bold)),
+            Text(
+              'Relaying via ${message.relayedVia ?? 'Mesh'}',
+              style: GoogleFonts.inter(fontSize: 9, color: AppColors.primaryLight, fontWeight: FontWeight.bold),
+            ),
             const SizedBox(width: 2),
             const Icon(Icons.shortcut, size: 12, color: AppColors.primaryLight),
           ],

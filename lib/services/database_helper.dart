@@ -25,7 +25,7 @@ class DatabaseHelper {
 
     return await openDatabase(
       path,
-      version: 17,
+      version: 18,
       onCreate: _createDB,
       onUpgrade: _upgradeDB,
     );
@@ -60,7 +60,8 @@ class DatabaseHelper {
         isFileAccepted INTEGER NOT NULL DEFAULT 0,
         expiresAt TEXT,
         isBurned INTEGER NOT NULL DEFAULT 0,
-        imagePath TEXT
+        imagePath TEXT,
+        relayedVia TEXT
       )
     ''');
 
@@ -219,6 +220,13 @@ class DatabaseHelper {
       if (oldVersion < 17) {
         try {
           await db.execute('ALTER TABLE ${AppConstants.messageTable} ADD COLUMN imagePath TEXT');
+        } catch (e) {
+          // Column may already exist
+        }
+      }
+      if (oldVersion < 18) {
+        try {
+          await db.execute('ALTER TABLE ${AppConstants.messageTable} ADD COLUMN relayedVia TEXT');
         } catch (e) {
           // Column may already exist
         }

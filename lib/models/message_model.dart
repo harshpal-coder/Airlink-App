@@ -19,6 +19,7 @@ class Message {
   final DateTime? expiresAt;
   final bool isBurned;
   final String? imagePath;
+  final String? relayedVia;
 
   Message({
     required this.id,
@@ -37,6 +38,7 @@ class Message {
     this.expiresAt,
     this.isBurned = false,
     this.imagePath,
+    this.relayedVia,
   });
 
   Map<String, dynamic> toMap() {
@@ -57,6 +59,7 @@ class Message {
       'expiresAt': expiresAt?.toIso8601String(),
       'isBurned': isBurned ? 1 : 0,
       'imagePath': imagePath,
+      'relayedVia': relayedVia,
     };
   }
 
@@ -78,6 +81,7 @@ class Message {
       expiresAt: map['expiresAt'] != null ? DateTime.parse(map['expiresAt']) : null,
       isBurned: map['isBurned'] == 1,
       imagePath: map['imagePath'] as String?,
+      relayedVia: map['relayedVia'] as String?,
     );
   }
 
@@ -98,6 +102,7 @@ class Message {
     DateTime? expiresAt,
     bool? isBurned,
     String? imagePath,
+    String? relayedVia,
   }) {
     return Message(
       id: id ?? this.id,
@@ -116,6 +121,7 @@ class Message {
       expiresAt: expiresAt ?? this.expiresAt,
       isBurned: isBurned ?? this.isBurned,
       imagePath: imagePath ?? this.imagePath,
+      relayedVia: relayedVia ?? this.relayedVia,
     );
   }
 }
