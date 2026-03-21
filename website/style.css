@@ -130,6 +130,12 @@ nav.scrolled {
     overflow: hidden;
 }
 
+.hero .container {
+    display: flex;
+    align-items: center;
+    width: 100%;
+}
+
 .hero-content {
     flex: 1;
     z-index: 2;
@@ -546,31 +552,187 @@ footer {
     text-decoration: none;
 }
 
-/* Responsive */
+.footer-links a {
+    color: var(--text-dim);
+    text-decoration: none;
+}
+
+/* --- RESPONSIVE DESIGN --- */
+
+/* Menu Toggle Styling (Desktop Default) */
+.menu-toggle {
+    display: none;
+    background: none;
+    border: none;
+    color: var(--text-main);
+    font-size: 1.5rem;
+    cursor: pointer;
+    z-index: 1001;
+}
+
 @media (max-width: 968px) {
-    .hero {
+    .container {
+        padding: 0 1.5rem;
+    }
+
+    .hero .container {
         flex-direction: column;
         padding-top: 120px;
         text-align: center;
-        height: auto;
     }
     
-    .hero-image {
-        margin-top: 4rem;
-        display: none; /* Hide mockup on smaller screens for now */
+    .hero {
+        min-height: auto;
+        padding-bottom: 60px;
+    }
+    
+    .hero-content {
+        margin-bottom: 3rem;
     }
 
     .hero h1 {
-        font-size: 3rem;
+        font-size: 3.5rem;
+    }
+
+    .hero p {
+        margin-left: auto;
+        margin-right: auto;
+    }
+
+    .cta-group {
+        justify-content: center;
     }
 
     .info-row {
         flex-direction: column !important;
         gap: 2rem;
+        margin-bottom: 4rem;
     }
 
     .info-visual {
         width: 100%;
+        height: 350px;
+    }
+
+    .carousel-layout {
+        flex-direction: column;
+        gap: 2rem;
+        text-align: center;
+    }
+
+    .carousel-img {
+        height: 200px;
+    }
+}
+
+@media (max-width: 768px) {
+    nav {
+        padding: 1rem 0;
+    }
+
+    .menu-toggle {
+        display: block;
+    }
+
+    .nav-links {
+        position: fixed;
+        top: 0;
+        right: -100%;
+        width: 70%;
+        height: 100vh;
+        background: rgba(11, 14, 20, 0.95);
+        backdrop-filter: blur(15px);
+        flex-direction: column;
+        justify-content: center;
+        align-items: center;
+        transition: right 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+        box-shadow: -10px 0 30px rgba(0, 0, 0, 0.5);
+    }
+
+    .nav-links.active {
+        right: 0;
+    }
+
+    .nav-links a {
+        font-size: 1.25rem;
+        padding: 1rem;
+    }
+
+    .hero-image {
+        display: none;
+    }
+
+    .hero h1 {
+        font-size: 2.75rem;
+    }
+
+    .features-grid, .infographic-grid, .tech-grid, .use-cases-grid {
+        grid-template-columns: 1fr;
+        gap: 1.5rem;
+    }
+
+    #mesh-lab-container {
+        height: 450px !important;
+    }
+
+    .mesh-stats {
+        top: 0.5rem;
+        right: 0.5rem;
+        padding: 0.5rem;
+        font-size: 0.7rem;
+    }
+
+    .mesh-controls {
+        bottom: 0.5rem;
+        left: 0.5rem;
+        right: 0.5rem;
+        flex-wrap: wrap;
+        justify-content: center;
+    }
+
+    .links-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .footer-links {
+        flex-direction: column;
+        gap: 1rem;
+    }
+}
+
+@media (max-width: 480px) {
+    .hero h1 {
+        font-size: 2.25rem;
+    }
+
+    .cta-group {
+        flex-direction: column;
+        gap: 1rem;
+    }
+
+    .btn {
+        width: 100%;
+        text-align: center;
+    }
+
+    section {
+        padding: 60px 0;
+    }
+
+    h2 {
+        font-size: 2rem !important;
+    }
+
+    .feature-card, .tech-card, .info-step {
+        padding: 2rem 1.5rem;
+    }
+
+    #mesh-lab-container {
+        height: 400px !important;
+    }
+    
+    #mesh-text-input {
+        width: 80px;
     }
 }
 

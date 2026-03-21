@@ -1,6 +1,7 @@
 name: airlink
 description: "A secure, peer-to-peer mesh messaging application."
 publish_to: 'none'
+license: MIT
 
 version: 1.0.0+1
 

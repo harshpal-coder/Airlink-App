@@ -3,7 +3,7 @@
 
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, shrink-to-fit=no">
     <title>Airlink | Secure P2P Mesh Messaging</title>
     <meta name="description"
         content="Airlink is a secure, decentralized messaging app that works without internet. Uses mesh networking and Signal Protocol encryption.">
@@ -29,7 +29,10 @@
                 <img src="assets/logo.png" alt="Airlink Logo">
                 Airlink
             </a>
-            <div class="nav-links">
+            <button class="menu-toggle" id="menu-toggle" aria-label="Toggle Navigation">
+                <i class="fa-solid fa-bars"></i>
+            </button>
+            <div class="nav-links" id="nav-links">
                 <a href="#features">Features</a>
                 <a href="#mesh-lab">Mesh Lab</a>
                 <a href="#tech">Technology</a>
@@ -40,7 +43,7 @@
     </nav>
 
     <header class="hero">
-        <div class="container" style="display: flex; align-items: center; width: 100%;">
+        <div class="container">
             <div class="hero-content" data-reveal>
                 <h1>Stay Connected <br><span class="gradient-text">Anywhere, Anytime.</span></h1>
                 <p>Airlink is a revolutionary peer-to-peer messaging app that works without internet or cellular
