@@ -481,9 +481,11 @@ nav.scrolled {
 
 .links-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-    gap: 2rem;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 250px));
+    justify-content: center;
+    gap: 1.5rem;
     margin-top: 3rem;
+    width: 100%;
 }
 
 /* Shape Buttons */
@@ -510,7 +512,7 @@ nav.scrolled {
 .shape-btn i { font-size: 0.9rem; }
 
 .link-item {
-    padding: 2rem;
+    padding: 2.5rem 2rem;
     text-decoration: none;
     color: var(--text-main);
     display: flex;
@@ -518,6 +520,7 @@ nav.scrolled {
     align-items: center;
     gap: 1rem;
     transition: all 0.3s ease;
+    width: 100%;
 }
 
 .link-item i {
@@ -692,6 +695,7 @@ footer {
 
     .links-grid {
         grid-template-columns: 1fr;
+        justify-items: center;
     }
 
     .footer-links {
