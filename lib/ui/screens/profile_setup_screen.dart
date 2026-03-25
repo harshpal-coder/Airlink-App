@@ -106,26 +106,33 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen>
       );
       return;
     }
-
     setState(() => _isSaving = true);
+    try {
+      final chatProvider = Provider.of<ChatProvider>(context, listen: false);
 
-    final chatProvider = Provider.of<ChatProvider>(context, listen: false);
+      // Save the username
+      await chatProvider.updateCurrentUserName(username);
+      
+      // If a photo was picked, save it via provider
+      if (_localImagePath != null) {
+        await chatProvider.updateProfileImageFromPath(_localImagePath!);
+      }
 
-    // Save the username
-    await chatProvider.updateCurrentUserName(username);
-    
-    // If a photo was picked, save it via provider
-    if (_localImagePath != null) {
-      // Directly update via the file path using the provider's internal logic
-      await chatProvider.updateProfileImageFromPath(_localImagePath!);
+      // Mark setup as complete
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool('profile_setup_done', true);
+
+      if (!mounted) return;
+      Navigator.pushReplacementNamed(context, '/main');
+    } catch (e) {
+      debugPrint('[ProfileSetup] Error saving profile: $e');
+      if (mounted) {
+        setState(() => _isSaving = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error saving profile: $e')),
+        );
+      }
     }
-
-    // Mark setup as complete
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool('profile_setup_done', true);
-
-    if (!mounted) return;
-    Navigator.pushReplacementNamed(context, '/home');
   }
 
   @override

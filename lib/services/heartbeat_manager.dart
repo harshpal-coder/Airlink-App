@@ -3,6 +3,8 @@ import 'dart:convert';
 import '../utils/connectivity_logger.dart';
 import 'discovery_service.dart';
 import 'database_helper.dart';
+import '../core/event_bus.dart';
+import '../core/app_events.dart';
 
 /// Events emitted by the HeartbeatManager.
 class HeartbeatEvent {
@@ -151,6 +153,8 @@ class HeartbeatManager {
             deviceName: peer.deviceName,
             type: HeartbeatEventType.peerLost,
           ));
+          // Publish to Global Event Bus
+          appEventBus.fire(PeerLostEvent(uuid: peer.uuid!, deviceName: peer.deviceName));
         }
         continue;
       }

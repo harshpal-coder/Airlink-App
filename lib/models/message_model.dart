@@ -1,4 +1,4 @@
-enum MessageType { text, sos, audio, image }
+enum MessageType { text, sos, audio, image, file }
 
 enum MessageStatus { sending, sent, delivered, read, failed, queued, relay }
 
@@ -20,6 +20,8 @@ class Message {
   final bool isBurned;
   final String? imagePath;
   final String? relayedVia;
+  final String? fileName;
+  final int? fileSize;
 
   Message({
     required this.id,
@@ -39,6 +41,8 @@ class Message {
     this.isBurned = false,
     this.imagePath,
     this.relayedVia,
+    this.fileName,
+    this.fileSize,
   });
 
   Map<String, dynamic> toMap() {
@@ -60,6 +64,8 @@ class Message {
       'isBurned': isBurned ? 1 : 0,
       'imagePath': imagePath,
       'relayedVia': relayedVia,
+      'fileName': fileName,
+      'fileSize': fileSize,
     };
   }
 
@@ -82,6 +88,8 @@ class Message {
       isBurned: map['isBurned'] == 1,
       imagePath: map['imagePath'] as String?,
       relayedVia: map['relayedVia'] as String?,
+      fileName: map['fileName'] as String?,
+      fileSize: map['fileSize'] as int?,
     );
   }
 
@@ -103,6 +111,8 @@ class Message {
     bool? isBurned,
     String? imagePath,
     String? relayedVia,
+    String? fileName,
+    int? fileSize,
   }) {
     return Message(
       id: id ?? this.id,
@@ -122,6 +132,8 @@ class Message {
       isBurned: isBurned ?? this.isBurned,
       imagePath: imagePath ?? this.imagePath,
       relayedVia: relayedVia ?? this.relayedVia,
+      fileName: fileName ?? this.fileName,
+      fileSize: fileSize ?? this.fileSize,
     );
   }
 }

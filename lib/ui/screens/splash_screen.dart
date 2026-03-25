@@ -97,10 +97,14 @@ class _SplashScreenState extends State<SplashScreen> with TickerProviderStateMix
     if (!mounted) return;
     
     final chatProvider = Provider.of<ChatProvider>(context, listen: false);
+    debugPrint('[Splash] Ensuring current user/profile...');
     await chatProvider.ensureCurrentUser(fallbackName);
     
+    debugPrint('[Splash] Initializing discovery and mesh radio...');
+    await chatProvider.startDiscovery();
+    
     // Simulate some loading time for branding effect
-    await Future.delayed(const Duration(seconds: 3));
+    await Future.delayed(const Duration(seconds: 2));
 
     if (!mounted) return;
 
@@ -120,7 +124,7 @@ class _SplashScreenState extends State<SplashScreen> with TickerProviderStateMix
     
     if (!mounted) return;
     if (setupDone) {
-      Navigator.pushReplacementNamed(context, '/home');
+      Navigator.pushReplacementNamed(context, '/main');
     } else {
       Navigator.pushReplacementNamed(context, '/profile_setup');
     }

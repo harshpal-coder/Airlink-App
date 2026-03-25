@@ -8,12 +8,14 @@ import 'package:provider/provider.dart';
 import 'package:intl/intl.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:file_picker/file_picker.dart';
 import '../../services/chat_provider.dart';
 import '../../services/notification_service.dart';
 import '../../models/message_model.dart';
 import '../../core/constants.dart';
 import 'user_profile_screen.dart';
 import 'image_viewer_screen.dart';
+import 'security_screen.dart';
 
 class ChatScreen extends StatefulWidget {
   final String peerUuid;
@@ -151,6 +153,21 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
+  Future<void> _pickAndSendFile() async {
+    final result = await FilePicker.platform.pickFiles(type: FileType.any);
+    if (result != null && result.files.single.path != null) {
+      final file = result.files.single;
+      final int size = file.size; // bytes
+      if (size > 20 * 1024 * 1024) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('File must be under 20MB')),
+        );
+        return;
+      }
+      await _provider.sendFile(widget.peerUuid, file.path!, file.name, size);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -255,6 +272,24 @@ class _ChatScreenState extends State<ChatScreen> {
             },
           ),
         ),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.lock_outline, size: 22, color: AppColors.primary),
+            tooltip: 'End-to-End Encrypted',
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => SecurityScreen(
+                    peerUuid: widget.peerUuid,
+                    peerName: widget.peerName,
+                  ),
+                ),
+              );
+            },
+          ),
+          const SizedBox(width: 8),
+        ],
       ),
       body: Consumer<ChatProvider>(
         builder: (context, provider, child) {
@@ -337,33 +372,167 @@ class _ChatScreenState extends State<ChatScreen> {
       ),
     );
   }
+  void _showAttachmentOptions() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (context) => Container(
+        padding: const EdgeInsets.symmetric(vertical: 24, horizontal: 24),
+        decoration: const BoxDecoration(
+          color: AppColors.surfaceDark,
+          borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+        ),
+        child: SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 40,
+                height: 4,
+                margin: const EdgeInsets.only(bottom: 24),
+                decoration: BoxDecoration(
+                  color: AppColors.textMuted.withValues(alpha: 0.3),
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                children: [
+                  _buildAttachOption(
+                    icon: Icons.image,
+                    color: Colors.purpleAccent,
+                    label: 'Gallery',
+                    onTap: () {
+                      Navigator.pop(context);
+                      _pickAndSendImage();
+                    },
+                  ),
+                  _buildAttachOption(
+                    icon: Icons.insert_drive_file,
+                    color: Colors.blueAccent,
+                    label: 'Document',
+                    onTap: () {
+                      Navigator.pop(context);
+                      _pickAndSendFile();
+                    },
+                  ),
+                  // Add more options here if needed later (e.g. Location, Contact)
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildAttachOption({required IconData icon, required Color color, required String label, required VoidCallback onTap}) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: color.withValues(alpha: 0.1),
+              shape: BoxShape.circle,
+            ),
+            child: Icon(icon, color: color, size: 28),
+          ),
+          const SizedBox(height: 8),
+          Text(label, style: GoogleFonts.inter(color: AppColors.textPrimary, fontSize: 13, fontWeight: FontWeight.w500)),
+        ],
+      ),
+    );
+  }
 
   Widget _buildInputArea() {
     final hasText = _msgController.text.isNotEmpty;
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 20),
-      decoration: BoxDecoration(
-        color: Colors.transparent,
+      padding: EdgeInsets.only(
+        left: 12, 
+        right: 12, 
+        top: 12, 
+        bottom: MediaQuery.of(context).padding.bottom > 0 ? MediaQuery.of(context).padding.bottom : 12
       ),
-      child: SafeArea(
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(30),
-          child: BackdropFilter(
-            filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-              decoration: BoxDecoration(
-                color: AppColors.surfaceDark.withValues(alpha: 0.7),
-                borderRadius: BorderRadius.circular(30),
-                border: Border.all(color: AppColors.glassBorder.withValues(alpha: 0.1)),
-                boxShadow: [
-                  BoxShadow(color: Colors.black.withValues(alpha: 0.2), blurRadius: 20, offset: const Offset(0, 10)),
-                ],
+      decoration: const BoxDecoration(color: Colors.transparent),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.end,
+        children: [
+          Expanded(
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(28),
+              child: BackdropFilter(
+                filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
+                child: Container(
+                  padding: const EdgeInsets.only(left: 4, right: 4, top: 4, bottom: 4),
+                  decoration: BoxDecoration(
+                    color: AppColors.surfaceDark.withValues(alpha: 0.8),
+                    borderRadius: BorderRadius.circular(28),
+                    border: Border.all(color: AppColors.glassBorder.withValues(alpha: 0.1)),
+                  ),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: [
+                      IconButton(
+                        icon: const Icon(Icons.add, color: AppColors.textMuted, size: 24),
+                        onPressed: _showAttachmentOptions,
+                        padding: const EdgeInsets.all(12),
+                        constraints: const BoxConstraints(),
+                      ),
+                      Expanded(
+                        child: TextField(
+                          controller: _msgController,
+                          minLines: 1,
+                          maxLines: 5,
+                          style: GoogleFonts.inter(color: AppColors.textPrimary, fontSize: 16),
+                          decoration: InputDecoration(
+                            hintText: _burnDuration != null 
+                              ? 'Burning (${_burnDuration!.inSeconds}s)...' 
+                              : 'Message',
+                            hintStyle: const TextStyle(color: AppColors.textMuted, fontSize: 16),
+                            border: InputBorder.none,
+                            isDense: true,
+                            contentPadding: const EdgeInsets.symmetric(vertical: 12),
+                          ),
+                        ),
+                      ),
+                      IconButton(
+                        icon: Icon(
+                          _burnDuration == null ? Icons.local_fire_department_outlined : Icons.local_fire_department,
+                          color: _burnDuration == null ? AppColors.textMuted : Colors.orangeAccent,
+                          size: 24,
+                        ),
+                        onPressed: _toggleBurnMode,
+                        padding: const EdgeInsets.all(12),
+                        constraints: const BoxConstraints(),
+                      ),
+                    ],
+                  ),
+                ),
               ),
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.end,
-                children: [
-                  GestureDetector(
+            ),
+          ),
+          const SizedBox(width: 8),
+          AnimatedContainer(
+            duration: const Duration(milliseconds: 200),
+            margin: const EdgeInsets.only(bottom: 2),
+            decoration: BoxDecoration(
+              gradient: hasText 
+                  ? const LinearGradient(colors: [AppColors.primary, AppColors.primaryLight])
+                  : const LinearGradient(colors: [Color(0xFF00BFA5), Color(0xFF1DE9B6)]),
+              shape: BoxShape.circle,
+              boxShadow: [BoxShadow(color: (hasText ? AppColors.glowBlue : const Color(0xFF00BFA5)).withValues(alpha: 0.3), blurRadius: 10, offset: const Offset(0, 4))],
+            ),
+            child: hasText
+                ? IconButton(
+                    icon: const Icon(Icons.send_rounded, color: Colors.white, size: 24),
+                    onPressed: _sendMessage,
+                    padding: const EdgeInsets.all(14),
+                    constraints: const BoxConstraints(),
+                  )
+                : GestureDetector(
                     onLongPressStart: (_) {
                       HapticFeedback.heavyImpact();
                       Provider.of<ChatProvider>(context, listen: false).startRecording();
@@ -375,78 +544,22 @@ class _ChatScreenState extends State<ChatScreen> {
                     child: Consumer<ChatProvider>(
                       builder: (context, provider, child) {
                         return Container(
-                          padding: const EdgeInsets.all(8),
+                          padding: const EdgeInsets.all(14),
                           decoration: BoxDecoration(
-                            color: provider.isRecording ? Colors.redAccent.withValues(alpha: 0.2) : Colors.transparent,
+                            color: provider.isRecording ? Colors.redAccent : Colors.transparent,
                             shape: BoxShape.circle,
                           ),
                           child: Icon(
                             provider.isRecording ? Icons.mic : Icons.mic_none_rounded,
-                            color: provider.isRecording ? Colors.redAccent : AppColors.textMuted,
+                            color: Colors.white,
                             size: 24,
                           ),
                         );
                       }
                     ),
                   ),
-                  const SizedBox(width: 4),
-                  IconButton(
-                    icon: const Icon(Icons.image_outlined, color: AppColors.textMuted, size: 24),
-                    onPressed: _pickAndSendImage,
-                    tooltip: 'Send image',
-                  ),
-                  const SizedBox(width: 4),
-                  Expanded(
-                    child: TextField(
-                      controller: _msgController,
-                      minLines: 1,
-                      maxLines: 5,
-                      style: GoogleFonts.inter(color: AppColors.textPrimary, fontSize: 15),
-                      decoration: InputDecoration(
-                        hintText: _burnDuration != null 
-                          ? 'Burning (${_burnDuration!.inSeconds}s)...' 
-                          : 'Type a message...',
-                        hintStyle: const TextStyle(color: AppColors.textMuted, fontSize: 14),
-                        border: InputBorder.none,
-                        isDense: true,
-                        contentPadding: const EdgeInsets.symmetric(vertical: 10),
-                      ),
-                    ),
-                  ),
-                  IconButton(
-                    icon: Icon(
-                      _burnDuration == null ? Icons.local_fire_department_outlined : Icons.local_fire_department,
-                      color: _burnDuration == null ? AppColors.textMuted : Colors.orangeAccent,
-                      size: 22,
-                    ),
-                    onPressed: _toggleBurnMode,
-                    tooltip: 'Self-destruct mode',
-                  ),
-                  AnimatedContainer(
-                    duration: const Duration(milliseconds: 200),
-                    margin: const EdgeInsets.only(bottom: 2, right: 2),
-                    decoration: BoxDecoration(
-                      gradient: hasText 
-                          ? const LinearGradient(colors: [AppColors.primary, AppColors.primaryLight])
-                          : null,
-                      color: hasText ? null : AppColors.surfaceElevated,
-                      shape: BoxShape.circle,
-                      boxShadow: hasText ? [BoxShadow(color: AppColors.glowBlue, blurRadius: 10, spreadRadius: 1)] : [],
-                    ),
-                    child: IconButton(
-                      icon: Icon(
-                        Icons.send_rounded, 
-                        color: hasText ? Colors.white : AppColors.textMuted, 
-                        size: 22
-                      ),
-                      onPressed: hasText ? _sendMessage : null,
-                    ),
-                  ),
-                ],
-              ),
-            ),
           ),
-        ),
+        ],
       ),
     );
   }
@@ -622,6 +735,9 @@ class _MessageBubble extends StatelessWidget {
   Widget _buildMessageContent(Message message, {required bool isMe}) {
     if (message.type == MessageType.image) {
       return _ImageMessageBubble(message: message, isMe: isMe);
+    }
+    if (message.type == MessageType.file) {
+      return _FileMessageBubble(message: message, isMe: isMe);
     }
     if (message.type == MessageType.text) {
       return Text(message.content, style: GoogleFonts.inter(fontSize: 15, color: Colors.white, height: 1.4));
@@ -832,6 +948,87 @@ class _ImageMessageBubble extends StatelessWidget {
               ),
             ),
         ],
+      ),
+    );
+  }
+}
+
+// ─── File Message Bubble ───────────────────────────────────────
+class _FileMessageBubble extends StatelessWidget {
+  final Message message;
+  final bool isMe;
+  const _FileMessageBubble({required this.message, required this.isMe});
+
+  String _formatBytes(int bytes) {
+    if (bytes <= 0) return "0 B";
+    const suffixes = ["B", "KB", "MB", "GB", "TB"];
+    var i = 0;
+    double d = bytes.toDouble();
+    while (d > 1024 && i < suffixes.length - 1) {
+      d /= 1024;
+      i++;
+    }
+    return "${d.toStringAsFixed(1)} ${suffixes[i]}";
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final fileName = message.fileName ?? 'Unknown File';
+    final fileSize = message.fileSize ?? 0;
+    final filePath = message.imagePath; // we store the file path here
+
+    return InkWell(
+      onTap: () {
+        if (filePath != null) {
+          Provider.of<ChatProvider>(context, listen: false).openFile(filePath);
+        }
+      },
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 8),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: isMe ? Colors.white.withValues(alpha: 0.2) : AppColors.primary.withValues(alpha: 0.2),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Icon(
+                Icons.insert_drive_file,
+                color: isMe ? Colors.white : AppColors.primaryLight,
+                size: 24,
+              ),
+            ),
+            const SizedBox(width: 12),
+            Flexible(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    fileName,
+                    style: GoogleFonts.inter(
+                      fontSize: 14,
+                      color: Colors.white,
+                      fontWeight: FontWeight.w600,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    _formatBytes(fileSize),
+                    style: GoogleFonts.inter(
+                      fontSize: 12,
+                      color: isMe ? Colors.white70 : AppColors.textMuted,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

@@ -5,8 +5,6 @@ import 'dart:ui';
 import 'dart:isolate';
 import 'package:provider/provider.dart';
 import 'core/theme.dart';
-import 'core/constants.dart';
-import 'services/database_helper.dart';
 import 'services/discovery_service.dart';
 import 'services/messaging_service.dart';
 import 'services/peer_ai_service.dart';
@@ -17,12 +15,12 @@ import 'services/reconnection_manager.dart';
 import 'services/reputation_service.dart';
 import 'services/connectivity_state_monitor.dart';
 import 'services/message_queue_manager.dart';
+import 'services/database_helper.dart';
 import 'services/adaptive_discovery_manager.dart';
 import 'services/motion_service.dart';
 import 'package:flutter_background_service/flutter_background_service.dart';
 import 'background/background_tasks.dart';
 import 'background/radio_state_receiver.dart';
-import 'utils/connectivity_logger.dart';
 
 import 'ui/screens/splash_screen.dart';
 import 'ui/screens/profile_setup_screen.dart';
@@ -32,12 +30,19 @@ import 'ui/screens/chat_screen.dart';
 import 'ui/screens/settings_screen.dart';
 import 'ui/screens/network_map_screen.dart';
 import 'ui/screens/qr_link_screen.dart';
+import 'repositories/chat_repository.dart';
+import 'injection.dart';
+import 'core/event_bus.dart';
+import 'core/app_events.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
   // Ensure database is ready
   await DatabaseHelper.instance.database;
+
+  // Setup Dependency Injection
+  setupInjection();
 
   // Set system UI style
   SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
@@ -58,99 +63,65 @@ void main() async {
     await AirLinkBackgroundTasks.scheduleMaintenance();
   }
 
-  // ── Instantiate core services in dependency order ──
-  final reputationService = ReputationService();
-  final aiService = PeerAIService();
-  final motionService = MotionService();
-  motionService.start();
+  // ── Access services via Service Locator ──
+  getIt<ReputationService>(); 
+  final aiService = getIt<PeerAIService>();
+  final motionService = getIt<MotionService>();
+  final discoveryService = getIt<DiscoveryService>();
+  getIt<HeartbeatManager>();
+  final reconnectionManager = getIt<ReconnectionManager>();
+  final connectivityStateMonitor = getIt<ConnectivityStateMonitor>();
+  final messageQueueManager = getIt<MessageQueueManager>();
+  final messagingService = getIt<MessagingService>();
+  final adaptiveDiscoveryManager = getIt<AdaptiveDiscoveryManager>();
 
-  // Link Motion to AI
+  // Start standalone monitoring services
+  motionService.start();
+  adaptiveDiscoveryManager.start();
+
+  // Wire Motion to AI
   motionService.stateChanges.listen((state) {
     aiService.updateLocalMotionState(state);
   });
 
-  final discoveryService = DiscoveryService(
-    reputationService: reputationService,
-    aiService: aiService,
-  );
-
-  final heartbeatManager = HeartbeatManager(
-    discoveryService: discoveryService,
-  );
-
-  final reconnectionManager = ReconnectionManager(
-    discoveryService: discoveryService,
-    reputationService: reputationService,
-  );
-  // Wire the instant-disconnect callback so peer drops trigger an immediate
-  // reconnect attempt (attempt 0 = no delay) instead of waiting for the next
-  // periodic refresh cycle.
+  // Wire the instant-disconnect callback
   reconnectionManager.installOn(discoveryService);
 
-  final connectivityStateMonitor = ConnectivityStateMonitor();
+  // ── Wire cross-manager events via Event Bus ──
 
-  final messageQueueManager = MessageQueueManager(
-    discoveryService: discoveryService,
-  );
-
-  final messagingService = MessagingService(
-    discoveryService: discoveryService,
-    heartbeatManager: heartbeatManager,
-    messageQueueManager: messageQueueManager,
-    reputationService: reputationService,
-    aiService: aiService,
-  );
-
-  final adaptiveDiscoveryManager = AdaptiveDiscoveryManager(
-    discoveryService: discoveryService,
-  );
-  adaptiveDiscoveryManager.start();
-
-  // ── Wire cross-manager event listeners ──
-
-  // HeartbeatManager → ReconnectionManager: auto-reconnect on peer loss
-  heartbeatManager.events.listen((event) {
-    if (event.type == HeartbeatEventType.peerLost) {
-      final device = discoveryService.getDeviceByUuid(event.uuid);
-      if (device != null) {
-        reconnectionManager.scheduleReconnect(device);
-        connectivityStateMonitor.updateState(
-          uuid: event.uuid,
-          deviceName: event.deviceName,
-          isConnected: false,
-        );
-      }
-    }
-  });
-
-  // ReconnectionManager → MessageQueueManager: flush queue on reconnect
-  reconnectionManager.events.listen((event) {
-    if (event.type == ReconnectEventType.succeeded) {
-      messageQueueManager.processQueueForPeer(event.uuid);
+  // Peer Lost → Reconnect
+  appEventBus.on<PeerLostEvent>().listen((event) {
+    final device = discoveryService.getDeviceByUuid(event.uuid);
+    if (device != null) {
+      reconnectionManager.scheduleReconnect(device);
       connectivityStateMonitor.updateState(
         uuid: event.uuid,
         deviceName: event.deviceName,
-        isConnected: true,
+        isConnected: false,
       );
     }
   });
 
-  // Restore connection state from previous session (crash recovery)
-  final previouslyConnected = await connectivityStateMonitor.restoreState();
-  if (previouslyConnected.isNotEmpty) {
-    ConnectivityLogger.info(
-      LogCategory.connection,
-      'Will reconnect to ${previouslyConnected.length} previously connected peers',
+  // Reconnect Succeeded → Flush Queue
+  appEventBus.on<ReconnectSucceededEvent>().listen((event) {
+    messageQueueManager.processQueueForPeer(event.uuid);
+    connectivityStateMonitor.updateState(
+      uuid: event.uuid,
+      deviceName: event.deviceName,
+      isConnected: true,
     );
-  }
+  });
 
-  // ── Radio State Handler — BT/WiFi on/off detection ──
+  // Restore connection state from previous session
+  await connectivityStateMonitor.restoreState();
+
+  // ── Radio State Handler ──
   final radioStateHandler = RadioStateHandler();
   radioStateHandler.init(
     onStateChanged: (radioType, enabled) {
       discoveryService.onRadioStateChanged(radioType, enabled);
+      appEventBus.fire(RadioStateChangedEvent(radioType: radioType, isEnabled: enabled));
       if (enabled) {
-        // When radio (BT/WiFi) is turned back on, immediately try to reconnect to all lost peers
         reconnectionManager.triggerImmediateBurst();
       }
     },
@@ -160,8 +131,8 @@ void main() async {
   final bgService = FlutterBackgroundService();
 
   bgService.on('keep_alive_poke').listen((_) {
-    ConnectivityLogger.debug(LogCategory.background, 'Received keep-alive poke');
     discoveryService.refreshRadio();
+    appEventBus.fire(BackgroundPokeEvent());
   });
 
   bgService.on('save_connection_state').listen((_) {
@@ -174,7 +145,6 @@ void main() async {
   });
 
   bgService.on('connectivity_restore').listen((_) async {
-    ConnectivityLogger.info(LogCategory.background, 'Connectivity restore triggered');
     await discoveryService.restoreDiscoveryState();
   });
 
@@ -192,7 +162,6 @@ void main() async {
         final chat = await DatabaseHelper.instance.getChatByPeerUuid(peerUuid);
         final peerName = chat?.peerName ?? 'Unknown';
         
-        debugPrint('[Main] Received notification reply to send to $peerName ($peerUuid): $replyText');
         await messagingService.sendTextMessage(peerUuid, peerName, replyText);
       }
     } catch (e) {
@@ -200,36 +169,11 @@ void main() async {
     }
   });
 
-  runApp(MyApp(
-    discoveryService: discoveryService,
-    messagingService: messagingService,
-    reconnectionManager: reconnectionManager,
-    heartbeatManager: heartbeatManager,
-    connectivityStateMonitor: connectivityStateMonitor,
-    messageQueueManager: messageQueueManager,
-    reputationService: reputationService,
-  ));
+  runApp(const MyApp());
 }
 
 class MyApp extends StatelessWidget {
-  final DiscoveryService discoveryService;
-  final MessagingService messagingService;
-  final ReconnectionManager reconnectionManager;
-  final HeartbeatManager heartbeatManager;
-  final ConnectivityStateMonitor connectivityStateMonitor;
-  final MessageQueueManager messageQueueManager;
-  final ReputationService reputationService;
-
-  const MyApp({
-    super.key,
-    required this.discoveryService,
-    required this.messagingService,
-    required this.reconnectionManager,
-    required this.heartbeatManager,
-    required this.connectivityStateMonitor,
-    required this.messageQueueManager,
-    required this.reputationService,
-  });
+  const MyApp({super.key});
 
   @override
   Widget build(BuildContext context) {
@@ -237,27 +181,26 @@ class MyApp extends StatelessWidget {
       providers: [
         ChangeNotifierProvider(
           create: (_) => ChatProvider(
-            discoveryService: discoveryService,
-            messagingService: messagingService,
-            reconnectionManager: reconnectionManager,
-            heartbeatManager: heartbeatManager,
-            connectivityStateMonitor: connectivityStateMonitor,
-            messageQueueManager: messageQueueManager,
-            reputationService: reputationService,
+            discoveryService: getIt<DiscoveryService>(),
+            messagingService: getIt<MessagingService>(),
+            reconnectionManager: getIt<ReconnectionManager>(),
+            heartbeatManager: getIt<HeartbeatManager>(),
+            connectivityStateMonitor: getIt<ConnectivityStateMonitor>(),
+            messageQueueManager: getIt<MessageQueueManager>(),
+            reputationService: getIt<ReputationService>(),
+            chatRepository: getIt<ChatRepository>(),
           ),
         ),
       ],
       child: MaterialApp(
-        title: AppConstants.appName,
-        theme: AppTheme.lightTheme,
-        darkTheme: AppTheme.darkTheme,
-        themeMode: ThemeMode.dark,
+        title: 'Airlink',
         debugShowCheckedModeBanner: false,
+        theme: AppTheme.darkTheme,
         initialRoute: '/',
         routes: {
           '/': (context) => const SplashScreen(),
           '/profile_setup': (context) => const ProfileSetupScreen(),
-          '/home': (context) => const MainScreen(),
+          '/main': (context) => const MainScreen(),
           '/discovery': (context) => const DiscoveryScreen(),
           '/settings': (context) => const SettingsScreen(),
           '/network_map': (context) => const NetworkMapScreen(),
@@ -267,13 +210,11 @@ class MyApp extends StatelessWidget {
           if (settings.name == '/chat') {
             final args = settings.arguments as Map<String, dynamic>;
             return MaterialPageRoute(
-              builder: (context) {
-                return ChatScreen(
-                  peerUuid: args['peerUuid'],
-                  peerName: args['peerName'],
-                  peerProfileImage: args['peerProfileImage'],
-                );
-              },
+              builder: (context) => ChatScreen(
+                peerUuid: args['peerUuid'],
+                peerName: args['peerName'],
+                peerProfileImage: args['peerProfileImage'],
+              ),
             );
           }
           return null;

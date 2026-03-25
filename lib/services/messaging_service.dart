@@ -541,6 +541,41 @@ class MessagingService {
           );
           _relayMessage('broadcast', payload, excludeEndpointId: senderId);
         }
+      } else if (type == 'file') {
+        final String base64Content = payload['content'] as String;
+        final String fileName = payload['fileName'] as String? ?? 'file';
+        final int fileSize = payload['fileSize'] as int? ?? 0;
+        await _processIncomingFile(
+          senderId,
+          base64Content,
+          fileName,
+          fileSize,
+          senderName: originalSenderName,
+          senderUuid: originalSenderUuid,
+          incomingPayloadId: incomingPayloadId,
+          expiresAt: expiresAt,
+          hopCount: hopCount,
+        );
+        await _relayMessage(targetUuid ?? 'broadcast', payload, excludeEndpointId: senderId);
+      } else if (type == 'group_file') {
+        final String? groupId = payload['groupId'];
+        final String base64Content = payload['content'] as String;
+        final String fileName = payload['fileName'] as String? ?? 'file';
+        final int fileSize = payload['fileSize'] as int? ?? 0;
+        if (groupId != null) {
+          await _processIncomingGroupFile(
+            senderId,
+            groupId,
+            base64Content,
+            fileName,
+            fileSize,
+            senderName: originalSenderName,
+            senderUuid: originalSenderUuid,
+            incomingPayloadId: incomingPayloadId,
+            hopCount: hopCount,
+          );
+          _relayMessage('broadcast', payload, excludeEndpointId: senderId);
+        }
       } else if (type == 'group_update') {
         final String? groupId = payload['groupId'];
         final List<dynamic>? memberUuids = payload['members'];
@@ -1357,6 +1392,248 @@ class MessagingService {
       _playMessageSound(true, senderUuid: groupId);
     } catch (e) {
       debugPrint('[MessagingService] Error processing incoming group image: $e');
+    }
+  }
+
+  // ─────────────────── File Messaging ───────────────────
+
+  Future<void> sendFileMessage(String receiverUuid, String receiverName, String filePath, String fileName, int fileSize) async {
+    final File file = File(filePath);
+    if (!file.existsSync()) return;
+
+    final List<int> bytes = await file.readAsBytes();
+    final String base64Content = base64.encode(bytes);
+
+    final User? me = await dbHelper.getUser('me');
+    final messageId = const Uuid().v4();
+
+    final payload = {
+      'type': 'file',
+      'content': base64Content,
+      'fileName': fileName,
+      'fileSize': fileSize,
+      'senderUuid': me?.uuid ?? 'me',
+      'senderName': me?.deviceName ?? 'User',
+      'targetUuid': receiverUuid,
+      'messageId': messageId,
+      'hopCount': 0,
+    };
+
+    final message = Message(
+      id: messageId,
+      senderUuid: me?.uuid ?? 'me',
+      receiverUuid: receiverUuid,
+      content: '📄 File: $fileName',
+      timestamp: DateTime.now(),
+      type: MessageType.file,
+      status: MessageStatus.sending,
+      hopCount: 0,
+      imagePath: filePath,
+      fileName: fileName,
+      fileSize: fileSize,
+    );
+
+    await dbHelper.insertMessage(message);
+    await _updateChatRecord(receiverUuid, '📄 File: $fileName', message.timestamp, 0, peerName: receiverName);
+    _messageUpdatedController.sink.add(receiverUuid);
+    _playMessageSound(false);
+
+    final result = await _relayMessage(receiverUuid, payload);
+    if (result.payloadId != null) {
+      _payloadToMessageId[result.payloadId!] = messageId;
+      await dbHelper.updateMessagePayloadId(messageId, result.payloadId!);
+      await dbHelper.insertMessage(message.copyWith(
+        status: MessageStatus.relay, 
+        payloadId: result.payloadId,
+        relayedVia: result.nextHopName ?? 'Mesh',
+      ));
+    } else {
+      await dbHelper.insertMessage(message.copyWith(
+        status: MessageStatus.relay,
+        relayedVia: result.nextHopName ?? 'Mesh',
+      ));
+    }
+    _messageUpdatedController.sink.add(receiverUuid);
+  }
+
+  Future<void> sendGroupFileMessage(String groupId, String groupName, String filePath, String fileName, int fileSize) async {
+    final File file = File(filePath);
+    if (!file.existsSync()) return;
+
+    final List<int> bytes = await file.readAsBytes();
+    final String base64Content = base64.encode(bytes);
+
+    final User? me = await dbHelper.getUser('me');
+    final String myUuid = me?.uuid ?? 'me';
+    final messageId = const Uuid().v4();
+
+    final payload = {
+      'type': 'group_file',
+      'groupId': groupId,
+      'content': base64Content,
+      'fileName': fileName,
+      'fileSize': fileSize,
+      'senderUuid': myUuid,
+      'senderName': me?.deviceName ?? 'User',
+      'messageId': messageId,
+      'timestamp': DateTime.now().toIso8601String(),
+      'hopCount': 0,
+    };
+
+    final message = Message(
+      id: messageId,
+      senderUuid: myUuid,
+      senderName: me?.deviceName ?? 'Me',
+      receiverUuid: groupId,
+      content: '📄 File: $fileName',
+      timestamp: DateTime.now(),
+      type: MessageType.file,
+      status: MessageStatus.sent,
+      imagePath: filePath,
+      fileName: fileName,
+      fileSize: fileSize,
+    );
+
+    await dbHelper.insertMessage(message);
+    await _updateGroupRecord(groupId, '${me?.deviceName ?? 'You'}: 📄 File', message.timestamp, 0, name: groupName);
+    _messageUpdatedController.sink.add(null);
+    _playMessageSound(false);
+
+    final payloadJson = json.encode(payload);
+    final neighbors = discoveryService.getConnectedDevices();
+    int? firstPayloadId;
+    for (var peer in neighbors) {
+      final pid = await discoveryService.sendMessageToEndpoint(peer.deviceId, payloadJson);
+      firstPayloadId ??= pid;
+    }
+
+    if (firstPayloadId != null) {
+      _payloadToMessageId[firstPayloadId] = messageId;
+      await dbHelper.updateMessagePayloadId(messageId, firstPayloadId);
+      await dbHelper.insertMessage(message.copyWith(status: MessageStatus.sent, payloadId: firstPayloadId));
+    } else {
+      await dbHelper.updateMessageStatus(messageId, MessageStatus.sent);
+    }
+    _messageUpdatedController.sink.add(null);
+  }
+
+  Future<void> _processIncomingFile(
+    String senderEndpointId,
+    String base64Content,
+    String fileName,
+    int fileSize, {
+    String? senderName,
+    String? senderUuid,
+    int? incomingPayloadId,
+    DateTime? expiresAt,
+    int? hopCount,
+  }) async {
+    try {
+      final bytes = base64.decode(base64Content);
+      final directory = await getApplicationDocumentsDirectory();
+      final fileDir = Directory(p.join(directory.path, 'Documents'));
+      if (!await fileDir.exists()) await fileDir.create(recursive: true);
+      // to avoid name collisions
+      final String saveName = '${DateTime.now().millisecondsSinceEpoch}_$fileName';
+      final String filePath = p.join(fileDir.path, saveName);
+      await File(filePath).writeAsBytes(bytes);
+
+      final User? me = await dbHelper.getUser('me');
+      final String myUuid = me?.uuid ?? 'me';
+      final msgId = const Uuid().v4();
+
+      final message = Message(
+        id: msgId,
+        senderUuid: senderUuid ?? senderEndpointId,
+        receiverUuid: myUuid,
+        content: '📄 File: $fileName',
+        timestamp: DateTime.now(),
+        type: MessageType.file,
+        status: MessageStatus.delivered,
+        payloadId: incomingPayloadId,
+        progress: 1.0,
+        imagePath: filePath,
+        fileName: fileName,
+        fileSize: fileSize,
+        expiresAt: expiresAt,
+        hopCount: hopCount ?? 0,
+      );
+
+      if (incomingPayloadId != null) _payloadToMessageId[incomingPayloadId] = msgId;
+      await dbHelper.insertMessage(message);
+      final effectiveSender = senderUuid ?? senderEndpointId;
+      await _updateChatRecord(effectiveSender, '📄 File: $fileName', message.timestamp, 
+          NotificationService.activeChatUuid == effectiveSender ? 0 : 1, 
+          peerName: senderName);
+      _messageUpdatedController.sink.add(effectiveSender);
+
+      NotificationService.showIncomingMessage(
+        senderName ?? 'Peer',
+        '📄 Sent a file: $fileName',
+        senderUuid: effectiveSender,
+        senderName: senderName ?? 'Peer',
+      );
+      _playMessageSound(true, senderUuid: effectiveSender);
+    } catch (e) {
+      debugPrint('[MessagingService] Error processing incoming file: $e');
+    }
+  }
+
+  Future<void> _processIncomingGroupFile(
+    String senderEndpointId,
+    String groupId,
+    String base64Content,
+    String fileName,
+    int fileSize, {
+    String? senderName,
+    String? senderUuid,
+    int? incomingPayloadId,
+    int? hopCount,
+  }) async {
+    try {
+      final bytes = base64.decode(base64Content);
+      final directory = await getApplicationDocumentsDirectory();
+      final fileDir = Directory(p.join(directory.path, 'Documents'));
+      if (!await fileDir.exists()) await fileDir.create(recursive: true);
+      final String saveName = '${DateTime.now().millisecondsSinceEpoch}_$fileName';
+      final String filePath = p.join(fileDir.path, saveName);
+      await File(filePath).writeAsBytes(bytes);
+
+      final msgId = const Uuid().v4();
+      final message = Message(
+        id: msgId,
+        senderUuid: senderUuid ?? senderEndpointId,
+        senderName: senderName ?? 'Unknown',
+        receiverUuid: groupId,
+        content: '📄 File: $fileName',
+        timestamp: DateTime.now(),
+        type: MessageType.file,
+        status: MessageStatus.delivered,
+        payloadId: incomingPayloadId,
+        progress: 1.0,
+        imagePath: filePath,
+        fileName: fileName,
+        fileSize: fileSize,
+        hopCount: hopCount ?? 0,
+      );
+
+      if (incomingPayloadId != null) _payloadToMessageId[incomingPayloadId] = msgId;
+      await dbHelper.insertMessage(message);
+
+      int unreadIncrement = (NotificationService.activeChatUuid == groupId) ? 0 : 1;
+      final group = await dbHelper.getGroupById(groupId);
+      await _updateGroupRecord(groupId, '${senderName ?? "Someone"}: 📄 File: $fileName', message.timestamp, unreadIncrement, name: group?.name);
+      _messageUpdatedController.sink.add(null);
+
+      NotificationService.showIncomingMessage(
+        'Group: ${group?.name ?? 'Unknown Group'}',
+        '${senderName ?? "Someone"}: 📄 Sent a file',
+        senderUuid: groupId,
+        senderName: group?.name,
+      );
+      _playMessageSound(true, senderUuid: groupId);
+    } catch (e) {
+      debugPrint('[MessagingService] Error processing incoming group file: $e');
     }
   }
 

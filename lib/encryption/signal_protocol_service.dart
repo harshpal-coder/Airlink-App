@@ -64,8 +64,8 @@ class SignalProtocolService {
     
     final address = SignalProtocolAddress(remoteUuid, 1);
     if (!(await _sessionStore.containsSession(address))) {
-      debugPrint('[Signal] No persistent session for $remoteUuid. Returning plaintext.');
-      return plaintext; 
+      debugPrint('[Signal] No persistent session for $remoteUuid. Refusing to send plaintext.');
+      throw Exception('E2EE Session Missing: A security handshake is required with this peer before messaging.');
     }
 
     final cipher = _getOrCreateCipher(remoteUuid);

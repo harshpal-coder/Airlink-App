@@ -45,6 +45,8 @@ dependencies:
   mobile_scanner: ^7.2.0
   saver_gallery: ^4.1.0
   flutter_image_compress: ^2.4.0
+  get_it: 8.0.2
+  event_bus: 2.0.0
 
 dev_dependencies:
   flutter_test:

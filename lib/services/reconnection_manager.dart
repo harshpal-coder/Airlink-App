@@ -5,6 +5,8 @@ import '../models/session_state.dart';
 import '../utils/connectivity_logger.dart';
 import 'discovery_service.dart';
 import 'reputation_service.dart';
+import '../core/event_bus.dart';
+import '../core/app_events.dart';
 
 /// Event emitted by the ReconnectionManager.
 class ReconnectEvent {
@@ -341,6 +343,8 @@ class ReconnectionManager {
         type: ReconnectEventType.succeeded,
         attemptNumber: state.attemptCount,
       ));
+      // Publish to Global Event Bus
+      appEventBus.fire(ReconnectSucceededEvent(uuid: uuid, deviceName: state.device.deviceName));
     }
   }
 

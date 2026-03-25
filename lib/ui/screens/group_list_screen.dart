@@ -75,6 +75,7 @@ class _GroupListScreenState extends State<GroupListScreen> {
           ],
         ),
         child: FloatingActionButton.extended(
+          heroTag: null,
           onPressed: () {
             Navigator.push(
               context,

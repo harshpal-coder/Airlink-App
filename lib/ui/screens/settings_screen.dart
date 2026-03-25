@@ -813,7 +813,9 @@ class SettingsScreen extends StatelessWidget {
                         if (image != null) {
                           provider.updateChatWallpaper(image.path);
                         }
-                        Navigator.pop(context);
+                        if (context.mounted) {
+                          Navigator.pop(context);
+                        }
                       },
                     ),
                     _buildWallpaperOption(

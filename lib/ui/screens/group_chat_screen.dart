@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import 'package:intl/intl.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:file_picker/file_picker.dart';
 import '../../services/chat_provider.dart';
 import '../../services/notification_service.dart';
 import 'group_info_screen.dart';
@@ -103,6 +104,22 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
     );
     if (picked != null) {
       await _provider.sendGroupImage(widget.groupId, picked.path);
+    }
+  }
+
+  Future<void> _pickAndSendFile() async {
+    final result = await FilePicker.platform.pickFiles(type: FileType.any);
+    if (result != null && result.files.single.path != null) {
+      final file = result.files.single;
+      final int size = file.size; // bytes
+      if (size > 20 * 1024 * 1024) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('File must be under 20MB')),
+        );
+        return;
+      }
+      await _provider.sendGroupFile(widget.groupId, file.path!, file.name, size);
     }
   }
 
@@ -213,7 +230,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
           ],
           Container(
             constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.75),
-            padding: message.type == MessageType.image
+            padding: message.type == MessageType.image || message.type == MessageType.file
                 ? const EdgeInsets.all(4)
                 : const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
             decoration: BoxDecoration(
@@ -227,10 +244,12 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
             ),
             child: message.type == MessageType.image
                 ? _GroupImageBubble(message: message)
-                : Text(
-                    message.content,
-                    style: GoogleFonts.inter(fontSize: 15, color: Colors.white, height: 1.4),
-                  ),
+                : message.type == MessageType.file
+                    ? _GroupFileBubble(message: message, isMe: isMe)
+                    : Text(
+                        message.content,
+                        style: GoogleFonts.inter(fontSize: 15, color: Colors.white, height: 1.4),
+                      ),
           ),
           Row(
             mainAxisSize: MainAxisSize.min,
@@ -294,43 +313,154 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
     );
   }
 
+  void _showAttachmentOptions() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (context) => Container(
+        padding: const EdgeInsets.symmetric(vertical: 24, horizontal: 24),
+        decoration: const BoxDecoration(
+          color: AppColors.surfaceDark,
+          borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+        ),
+        child: SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 40,
+                height: 4,
+                margin: const EdgeInsets.only(bottom: 24),
+                decoration: BoxDecoration(
+                  color: AppColors.textMuted.withValues(alpha: 0.3),
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                children: [
+                  _buildAttachOption(
+                    icon: Icons.image,
+                    color: Colors.purpleAccent,
+                    label: 'Gallery',
+                    onTap: () {
+                      Navigator.pop(context);
+                      _pickAndSendImage();
+                    },
+                  ),
+                  _buildAttachOption(
+                    icon: Icons.insert_drive_file,
+                    color: Colors.blueAccent,
+                    label: 'Document',
+                    onTap: () {
+                      Navigator.pop(context);
+                      _pickAndSendFile();
+                    },
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildAttachOption({required IconData icon, required Color color, required String label, required VoidCallback onTap}) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: color.withValues(alpha: 0.1),
+              shape: BoxShape.circle,
+            ),
+            child: Icon(icon, color: color, size: 28),
+          ),
+          const SizedBox(height: 8),
+          Text(label, style: GoogleFonts.inter(color: AppColors.textPrimary, fontSize: 13, fontWeight: FontWeight.w500)),
+        ],
+      ),
+    );
+  }
+
   Widget _buildInputArea() {
+    final hasText = _msgController.text.isNotEmpty;
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+      padding: EdgeInsets.only(
+        left: 12, 
+        right: 12, 
+        top: 12, 
+        bottom: MediaQuery.of(context).padding.bottom > 0 ? MediaQuery.of(context).padding.bottom : 12
+      ),
       decoration: const BoxDecoration(
         color: AppColors.surfaceDark,
       ),
       child: SafeArea(
+        bottom: false,
         child: Row(
+          crossAxisAlignment: CrossAxisAlignment.end,
           children: [
-            // Image picker button
-            IconButton(
-              icon: const Icon(Icons.image_outlined, color: AppColors.textMuted, size: 24),
-              tooltip: 'Send Image',
-              onPressed: _pickAndSendImage,
-              padding: const EdgeInsets.all(6),
-              constraints: const BoxConstraints(),
-            ),
-            const SizedBox(width: 4),
             Expanded(
               child: Container(
-                decoration: BoxDecoration(color: AppColors.bgDark, borderRadius: BorderRadius.circular(24), border: Border.all(color: AppColors.surfaceElevated)),
-                child: TextField(
-                  controller: _msgController,
-                  style: GoogleFonts.inter(color: AppColors.textPrimary, fontSize: 15),
-                  decoration: const InputDecoration(
-                    hintText: 'Type a message...',
-                    hintStyle: TextStyle(color: AppColors.textMuted, fontSize: 14),
-                    border: InputBorder.none,
-                    contentPadding: EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                  ),
+                padding: const EdgeInsets.only(left: 4, right: 4, top: 4, bottom: 4),
+                decoration: BoxDecoration(
+                  color: AppColors.bgDark, 
+                  borderRadius: BorderRadius.circular(28), 
+                  border: Border.all(color: AppColors.surfaceElevated),
+                ),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    IconButton(
+                      icon: const Icon(Icons.add, color: AppColors.textMuted, size: 24),
+                      onPressed: _showAttachmentOptions,
+                      padding: const EdgeInsets.all(12),
+                      constraints: const BoxConstraints(),
+                    ),
+                    Expanded(
+                      child: TextField(
+                        controller: _msgController,
+                        minLines: 1,
+                        maxLines: 5,
+                        style: GoogleFonts.inter(color: AppColors.textPrimary, fontSize: 16),
+                        decoration: const InputDecoration(
+                          hintText: 'Message',
+                          hintStyle: TextStyle(color: AppColors.textMuted, fontSize: 16),
+                          border: InputBorder.none,
+                          isDense: true,
+                          contentPadding: EdgeInsets.symmetric(vertical: 12),
+                        ),
+                        onChanged: (text) {
+                          setState(() {});
+                        },
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                  ],
                 ),
               ),
             ),
             const SizedBox(width: 8),
-            IconButton(
-              icon: const Icon(Icons.send_rounded, color: AppColors.primary, size: 28),
-              onPressed: _sendMessage,
+            AnimatedContainer(
+              duration: const Duration(milliseconds: 200),
+              margin: const EdgeInsets.only(bottom: 2),
+              decoration: BoxDecoration(
+                gradient: hasText 
+                    ? const LinearGradient(colors: [AppColors.primary, AppColors.primaryLight])
+                    : const LinearGradient(colors: [AppColors.surfaceElevated, AppColors.surfaceElevated]),
+                shape: BoxShape.circle,
+                boxShadow: hasText ? [BoxShadow(color: AppColors.glowBlue.withValues(alpha: 0.3), blurRadius: 10, offset: const Offset(0, 4))] : null,
+              ),
+              child: IconButton(
+                icon: Icon(Icons.send_rounded, color: hasText ? Colors.white : AppColors.textMuted, size: 24),
+                onPressed: hasText ? _sendMessage : null,
+                padding: const EdgeInsets.all(14),
+                constraints: const BoxConstraints(),
+              ),
             ),
           ],
         ),
@@ -413,6 +543,87 @@ class _GroupImageBubble extends StatelessWidget {
               ),
             ),
         ],
+      ),
+    );
+  }
+}
+
+// ─── Group File Bubble ─────────────────────────────────────────
+class _GroupFileBubble extends StatelessWidget {
+  final Message message;
+  final bool isMe;
+  const _GroupFileBubble({required this.message, required this.isMe});
+
+  String _formatBytes(int bytes) {
+    if (bytes <= 0) return "0 B";
+    const suffixes = ["B", "KB", "MB", "GB", "TB"];
+    var i = 0;
+    double d = bytes.toDouble();
+    while (d > 1024 && i < suffixes.length - 1) {
+      d /= 1024;
+      i++;
+    }
+    return "${d.toStringAsFixed(1)} ${suffixes[i]}";
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final fileName = message.fileName ?? 'Unknown File';
+    final fileSize = message.fileSize ?? 0;
+    final filePath = message.imagePath;
+
+    return InkWell(
+      onTap: () {
+        if (filePath != null) {
+          Provider.of<ChatProvider>(context, listen: false).openFile(filePath);
+        }
+      },
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 8),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: isMe ? Colors.white.withValues(alpha: 0.2) : AppColors.primary.withValues(alpha: 0.2),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Icon(
+                Icons.insert_drive_file,
+                color: isMe ? Colors.white : AppColors.primaryLight,
+                size: 24,
+              ),
+            ),
+            const SizedBox(width: 12),
+            Flexible(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    fileName,
+                    style: GoogleFonts.inter(
+                      fontSize: 14,
+                      color: Colors.white,
+                      fontWeight: FontWeight.w600,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    _formatBytes(fileSize),
+                    style: GoogleFonts.inter(
+                      fontSize: 12,
+                      color: isMe ? Colors.white70 : AppColors.textMuted,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

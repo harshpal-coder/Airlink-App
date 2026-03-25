@@ -22,11 +22,11 @@ import 'message_queue_manager.dart';
 import 'reputation_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:open_filex/open_filex.dart';
-import 'package:flutter_background_service/flutter_background_service.dart';
 import 'package:record/record.dart';
 import 'package:audioplayers/audioplayers.dart';
 import 'notification_service.dart';
 import 'heartbeat_manager.dart';
+import '../repositories/chat_repository.dart';
 import '../utils/connectivity_logger.dart';
 
 class ChatProvider extends ChangeNotifier with WidgetsBindingObserver {
@@ -37,6 +37,7 @@ class ChatProvider extends ChangeNotifier with WidgetsBindingObserver {
   final ConnectivityStateMonitor connectivityStateMonitor;
   final MessageQueueManager messageQueueManager;
   final ReputationService reputationService;
+  final ChatRepository chatRepository;
   final DatabaseHelper dbHelper = DatabaseHelper.instance;
 
   List<Device> discoveredDevices = [];
@@ -110,6 +111,7 @@ class ChatProvider extends ChangeNotifier with WidgetsBindingObserver {
     required this.connectivityStateMonitor,
     required this.messageQueueManager,
     required this.reputationService,
+    required this.chatRepository,
   }) {
     _init();
   }
@@ -251,37 +253,7 @@ class ChatProvider extends ChangeNotifier with WidgetsBindingObserver {
     _stateMonitorSubscription = connectivityStateMonitor.stateChanges.listen((_) {
       notifyListeners();
     });
-
-    // Automatically start services if they should be active
-    if (isBrowsing) await startBrowsing();
-    if (isAdvertising) await startAdvertising();
-    
-    if (isDiscovering) {
-      _ensureRescanTimer();
-      _startBatteryTimer();
-    }
-
-    // Listen for background keep-alive pokes
-    final service = FlutterBackgroundService();
-    service.on('keep_alive_poke').listen((event) async {
-      if (isDiscovering) {
-        final connected = discoveryService.getConnectedDevices();
-        if (connected.isEmpty) {
-          debugPrint('[ChatProvider] Received background keep-alive poke. Refreshing radio (no active connections).');
-          if (isBrowsing) await discoveryService.startBrowsing(forceRestart: true);
-          if (isAdvertising) await discoveryService.startAdvertising(forceRestart: true);
-        } else {
-          debugPrint('[ChatProvider] Received background keep-alive poke. Actively updating ${connected.length} peers.');
-          // Perform a small data exchange to keep OS sockets hot and radio active
-          for (var device in connected) {
-            messagingService.sendBatteryUpdate(device.deviceId);
-            messagingService.sendMeshUpdate(device.deviceId);
-          }
-        }
-      }
-    });
   }
-
   Future<void> _loadSettings() async {
     final prefs = await SharedPreferences.getInstance();
     // Defaulting to true: "Invisible Mode" OFF (Visible) and "Auto Discovery" ON
@@ -589,6 +561,20 @@ class ChatProvider extends ChangeNotifier with WidgetsBindingObserver {
     }
   }
 
+  Future<void> sendFile(String receiverUuid, String filePath, String fileName, int fileSize) async {
+    String peerName = _resolvePeerNameByUuid(receiverUuid);
+    await messagingService.sendFileMessage(receiverUuid, peerName, filePath, fileName, fileSize);
+  }
+
+  Future<void> sendGroupFile(String groupId, String filePath, String fileName, int fileSize) async {
+    try {
+      final group = groups.firstWhere((g) => g.id == groupId);
+      await messagingService.sendGroupFileMessage(groupId, group.name, filePath, fileName, fileSize);
+    } catch (_) {
+      await messagingService.sendGroupFileMessage(groupId, 'Group', filePath, fileName, fileSize);
+    }
+  }
+
   Future<void> addMembersToGroup(String groupId, List<String> memberUuids) async {
     await messagingService.addMembersToGroup(groupId, memberUuids);
     await loadGroups();
@@ -629,6 +615,11 @@ class ChatProvider extends ChangeNotifier with WidgetsBindingObserver {
   Future<List<Message>> getMessages(String peerUuid) async {
     if (currentUser == null) return [];
     return await dbHelper.getMessages(peerUuid, currentUser!.uuid);
+  }
+
+  Future<List<Message>> getSharedMedia(String peerUuid, {int? limit}) async {
+    if (currentUser == null) return [];
+    return await dbHelper.getSharedMedia(peerUuid, currentUser!.uuid, limit: limit);
   }
 
   Future<void> markChatAsRead(String peerUuid) async {

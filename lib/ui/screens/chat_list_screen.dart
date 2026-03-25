@@ -107,6 +107,7 @@ class _ChatListScreenState extends State<ChatListScreen> {
           ],
         ),
         child: FloatingActionButton.extended(
+          heroTag: null,
           onPressed: () => Navigator.pushNamed(context, '/discovery'),
           backgroundColor: AppColors.primary,
           elevation: 0,

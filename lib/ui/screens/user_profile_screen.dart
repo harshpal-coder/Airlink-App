@@ -7,6 +7,8 @@ import '../../services/chat_provider.dart';
 import '../../models/device_model.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
+import 'shared_media_screen.dart';
+import '../../models/message_model.dart';
 
 class UserProfileScreen extends StatelessWidget {
   final String peerUuid;
@@ -442,6 +444,8 @@ class UserProfileScreen extends StatelessWidget {
   }
 
   Widget _buildMediaSection(BuildContext context) {
+    final provider = Provider.of<ChatProvider>(context, listen: false);
+    
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16),
       child: Column(
@@ -455,30 +459,91 @@ class UserProfileScreen extends StatelessWidget {
                 style: GoogleFonts.outfit(fontSize: 16, fontWeight: FontWeight.bold, color: AppColors.textPrimary),
               ),
               TextButton(
-                onPressed: () {},
+                onPressed: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (context) => SharedMediaScreen(peerUuid: peerUuid, peerName: peerName),
+                    ),
+                  );
+                },
                 child: Text('See all', style: GoogleFonts.inter(color: AppColors.primaryLight, fontWeight: FontWeight.w600)),
               ),
             ],
           ),
           const SizedBox(height: 8),
-          Container(
-            width: double.infinity,
-            padding: const EdgeInsets.symmetric(vertical: 32),
-            decoration: BoxDecoration(
-              color: AppColors.surfaceDark.withValues(alpha: 0.3),
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(color: AppColors.glassBorder.withValues(alpha: 0.05)),
-            ),
-            child: Column(
-              children: [
-                Icon(Icons.photo_library_outlined, size: 32, color: AppColors.textMuted.withValues(alpha: 0.5)),
-                const SizedBox(height: 12),
-                Text(
-                  'No media shared yet',
-                  style: GoogleFonts.inter(fontSize: 13, color: AppColors.textMuted),
-                ),
-              ],
-            ),
+          FutureBuilder<List<Message>>(
+            future: provider.getSharedMedia(peerUuid, limit: 3),
+            builder: (context, snapshot) {
+              if (snapshot.connectionState == ConnectionState.waiting) {
+                return Container(
+                  height: 100,
+                  decoration: BoxDecoration(
+                    color: AppColors.surfaceDark.withValues(alpha: 0.3),
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                  child: const Center(child: CircularProgressIndicator(strokeWidth: 2)),
+                );
+              }
+              
+              final mediaList = snapshot.data ?? [];
+              if (mediaList.isEmpty) {
+                return Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.symmetric(vertical: 32),
+                  decoration: BoxDecoration(
+                    color: AppColors.surfaceDark.withValues(alpha: 0.3),
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(color: AppColors.glassBorder.withValues(alpha: 0.05)),
+                  ),
+                  child: Column(
+                    children: [
+                      Icon(Icons.photo_library_outlined, size: 32, color: AppColors.textMuted.withValues(alpha: 0.5)),
+                      const SizedBox(height: 12),
+                      Text(
+                        'No media shared yet',
+                        style: GoogleFonts.inter(fontSize: 13, color: AppColors.textMuted),
+                      ),
+                    ],
+                  ),
+                );
+              }
+
+              return Row(
+                children: mediaList.map((msg) {
+                  final isImage = msg.type == MessageType.image;
+                  return Expanded(
+                    child: GestureDetector(
+                      onTap: () {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (context) => SharedMediaScreen(peerUuid: peerUuid, peerName: peerName),
+                          ),
+                        );
+                      },
+                      child: Container(
+                        height: 100,
+                        margin: const EdgeInsets.symmetric(horizontal: 4),
+                        decoration: BoxDecoration(
+                          color: AppColors.surfaceDark,
+                          borderRadius: BorderRadius.circular(12),
+                          image: isImage 
+                            ? DecorationImage(
+                                image: FileImage(File(msg.imagePath ?? msg.content)),
+                                fit: BoxFit.cover,
+                              )
+                            : null,
+                        ),
+                        child: !isImage 
+                          ? Center(child: Icon(Icons.insert_drive_file_outlined, color: AppColors.primaryLight))
+                          : null,
+                      ),
+                    ),
+                  );
+                }).toList(),
+              );
+            },
           ),
         ],
       ),

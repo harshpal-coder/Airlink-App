@@ -3,7 +3,6 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 import 'package:nearby_connections/nearby_connections.dart';
-import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/device_model.dart';
 import 'package:flutter/foundation.dart';
@@ -90,17 +89,19 @@ class DiscoveryService {
     int connectedCount = getConnectedDevices().length;
     bool needsMorePeers = connectedCount < _targetDirectPeers;
     
-    int minutes = needsMorePeers ? 1 : 2; 
-    if (_currentBatteryLevel < 15) {
-      minutes = needsMorePeers ? 4 : 8; 
+    // Adjusted intervals: 2m default, 4m if battery is low.
+    // Ultra-fast (0) now maps to 30s or 60s instead of 15s/30s.
+    int minutes = needsMorePeers ? 2 : 4; 
+    if (_currentBatteryLevel < 20) {
+      minutes = needsMorePeers ? 5 : 10; 
     } else if (_devices.any((d) => d.isPluggedIn)) {
-      minutes = 0; // Use seconds for ultra-fast
+      minutes = 0; // Use seconds for adaptive high performance
     }
 
-    final jitter = Random().nextInt(10) - 5; // Reduced jitter for more predictability
+    final jitter = Random().nextInt(15) - 7; // Slightly more jitter for collision avoidance
     Duration interval;
     if (minutes == 0) {
-      interval = Duration(seconds: needsMorePeers ? 15 : 30); 
+      interval = Duration(seconds: needsMorePeers ? 30 : 60); 
     } else {
       interval = Duration(minutes: minutes) + Duration(seconds: jitter);
     }
@@ -123,10 +124,21 @@ class DiscoveryService {
   }
 
   Future<void> _executeRefresh() async {
-      ConnectivityLogger.debug(LogCategory.discovery,
-          'Periodic refresh: Restarting browsing/advertising...');
-      if (_isBrowsing) await startBrowsing(forceRestart: true);
-      if (_isAdvertising) await startAdvertising(forceRestart: true);
+      int connectedCount = getConnectedDevices().length;
+      
+      if (connectedCount == 0) {
+          ConnectivityLogger.debug(LogCategory.discovery,
+              'Periodic refresh (No peers): Force-restarting browsing/advertising...');
+          if (_isBrowsing) await startBrowsing(forceRestart: true);
+          if (_isAdvertising) await startAdvertising(forceRestart: true);
+      } else {
+          ConnectivityLogger.debug(LogCategory.discovery,
+              'Periodic refresh (Active connections: $connectedCount): Ensuring radio is alive without restart...');
+          // If already connected, only start if NOT already browsing/advertising (passive check)
+          // Do NOT forceRestart as it drops existing connections
+          if (!_isBrowsing) await startBrowsing(forceRestart: false);
+          if (!_isAdvertising) await startAdvertising(forceRestart: false);
+      }
   }
 
   Map<String, String> get knownDevices => _knownDevices;
@@ -153,8 +165,8 @@ class DiscoveryService {
     final oldBackbone = _devices[index].isBackbone;
     final oldPluggedIn = _devices[index].isPluggedIn;
 
-    // Only update if significant change to reduce UI churn
-    bool significant = (oldBattery - batteryLevel).abs() > 2 || 
+    // Only update if significant change to reduce UI churn and timer resets
+    bool significant = (oldBattery - batteryLevel).abs() >= 5 || 
                       (isBackbone != null && isBackbone != oldBackbone) ||
                       (isPluggedIn != null && isPluggedIn != oldPluggedIn) ||
                       (batteryLevel < 20 && oldBattery >= 20); // Always notify low battery crossing
@@ -166,7 +178,7 @@ class DiscoveryService {
     // Update local state if it's "me" or just use it to adjust frequency
     _currentBatteryLevel = batteryLevel;
     if (significant) {
-      _startRefreshTimer(); // Adaptive frequency update
+      _startRefreshTimer(); // Adaptive frequency update (less frequent now)
     }
 
     if (significant) {
@@ -204,11 +216,8 @@ class DiscoveryService {
     _userName = userName;
     _localUuid = localUuid;
     _devices.clear();
-    bool permissionsGranted = await _requestPermissions();
-    if (permissionsGranted) {
-      _startRefreshTimer();
-    }
-    return permissionsGranted;
+    _startRefreshTimer();
+    return true;
   }
 
   void setStrategy(Strategy newStrategy) {
@@ -216,18 +225,6 @@ class DiscoveryService {
     debugPrint('[DiscoveryService] Strategy changed to: $newStrategy');
   }
 
-  Future<bool> _requestPermissions() async {
-    await [
-      Permission.bluetooth,
-      Permission.bluetoothAdvertise,
-      Permission.bluetoothConnect,
-      Permission.bluetoothScan,
-      Permission.nearbyWifiDevices,
-      Permission.notification,
-    ].request();
-
-    return true;
-  }
 
   Future<void> startBrowsing({bool forceRestart = false}) async {
     if (_isBrowsing && !forceRestart) {

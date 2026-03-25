@@ -25,7 +25,7 @@ class DatabaseHelper {
 
     return await openDatabase(
       path,
-      version: 18,
+      version: 19,
       onCreate: _createDB,
       onUpgrade: _upgradeDB,
     );
@@ -61,7 +61,9 @@ class DatabaseHelper {
         expiresAt TEXT,
         isBurned INTEGER NOT NULL DEFAULT 0,
         imagePath TEXT,
-        relayedVia TEXT
+        relayedVia TEXT,
+        fileName TEXT,
+        fileSize INTEGER
       )
     ''');
 
@@ -231,6 +233,14 @@ class DatabaseHelper {
           // Column may already exist
         }
       }
+      if (oldVersion < 19) {
+        try {
+          await db.execute('ALTER TABLE ${AppConstants.messageTable} ADD COLUMN fileName TEXT');
+          await db.execute('ALTER TABLE ${AppConstants.messageTable} ADD COLUMN fileSize INTEGER');
+        } catch (e) {
+          // Column may already exist
+        }
+      }
     }
   }
 
@@ -269,7 +279,7 @@ class DatabaseHelper {
     );
   }
 
-  Future<List<Message>> getMessages(String peerUuid, String myUuid) async {
+  Future<List<Message>> getMessages(String peerUuid, String myUuid, {int? limit, int? offset}) async {
     final db = await instance.database;
     final bool isGroup = peerUuid.contains('group_');
     
@@ -280,6 +290,27 @@ class DatabaseHelper {
           : '(senderUuid = ? AND receiverUuid = ?) OR (senderUuid = ? AND receiverUuid = ?)',
       whereArgs: isGroup ? [peerUuid] : [myUuid, peerUuid, peerUuid, myUuid],
       orderBy: 'timestamp ASC',
+      limit: limit,
+      offset: offset,
+    );
+
+    return res.map((m) => Message.fromMap(m)).toList();
+  }
+
+  Future<List<Message>> getSharedMedia(String peerUuid, String myUuid, {int? limit}) async {
+    final db = await instance.database;
+    final bool isGroup = peerUuid.contains('group_');
+    
+    final res = await db.query(
+      AppConstants.messageTable,
+      where: isGroup
+          ? 'receiverUuid = ? AND (type = ? OR type = ?)'
+          : '((senderUuid = ? AND receiverUuid = ?) OR (senderUuid = ? AND receiverUuid = ?)) AND (type = ? OR type = ?)',
+      whereArgs: isGroup 
+          ? [peerUuid, MessageType.image.index, MessageType.file.index] 
+          : [myUuid, peerUuid, peerUuid, myUuid, MessageType.image.index, MessageType.file.index],
+      orderBy: 'timestamp DESC',
+      limit: limit,
     );
 
     return res.map((m) => Message.fromMap(m)).toList();
@@ -706,5 +737,21 @@ class DatabaseHelper {
     final res = await db.query('signal_identities', where: 'address_name = ?', whereArgs: [addressName]);
     if (res.isNotEmpty) return res.first;
     return null;
+  }
+
+  // --- Maintenance Operations ---
+  Future<int> pruneOldMessages(int days) async {
+    final db = await instance.database;
+    final cutoff = DateTime.now().subtract(Duration(days: days)).toIso8601String();
+    return await db.delete(
+      AppConstants.messageTable,
+      where: 'timestamp < ?',
+      whereArgs: [cutoff],
+    );
+  }
+
+  Future<void> vacuum() async {
+    final db = await instance.database;
+    await db.execute('VACUUM');
   }
 }

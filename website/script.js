@@ -320,6 +320,49 @@ if (labSection) {
                 const cols = 6;
                 node.targetX = (centerX - 200) + (i % cols) * 80;
                 node.targetY = (centerY - 150) + Math.floor(i / cols) * 80;
+            } else if (shape === 'infinity') {
+                const a = size + 50;
+                const denom = 1 + Math.sin(t) * Math.sin(t);
+                node.targetX = centerX + (a * Math.cos(t)) / denom;
+                node.targetY = centerY + (a * Math.sin(t) * Math.cos(t)) / denom;
+            } else if (shape === 'spiral') {
+                const turns = 3;
+                const p = i / labNodes.length;
+                const currentRadius = p * size * 1.5;
+                const currentAngle = p * Math.PI * 2 * turns;
+                node.targetX = centerX + Math.cos(currentAngle) * currentRadius;
+                node.targetY = centerY + Math.sin(currentAngle) * currentRadius;
+            } else if (shape === 'star') {
+                const p = i / labNodes.length;
+                const numPoints = 5;
+                const pointP = p * numPoints;
+                const pointIndex = Math.floor(pointP);
+                const localP = pointP - pointIndex;
+                
+                const outerRadius = size * 1.2;
+                const innerRadius = size * 0.5;
+                
+                const angle1 = (pointIndex / numPoints) * Math.PI * 2 - Math.PI / 2;
+                const angleHalf = ((pointIndex + 0.5) / numPoints) * Math.PI * 2 - Math.PI / 2;
+                const angle2 = ((pointIndex + 1) / numPoints) * Math.PI * 2 - Math.PI / 2;
+                
+                if (localP < 0.5) {
+                    const subP = localP * 2;
+                    const x1 = Math.cos(angle1) * outerRadius;
+                    const y1 = Math.sin(angle1) * outerRadius;
+                    const x2 = Math.cos(angleHalf) * innerRadius;
+                    const y2 = Math.sin(angleHalf) * innerRadius;
+                    node.targetX = centerX + x1 + (x2 - x1) * subP;
+                    node.targetY = centerY + y1 + (y2 - y1) * subP;
+                } else {
+                    const subP = (localP - 0.5) * 2;
+                    const x1 = Math.cos(angleHalf) * innerRadius;
+                    const y1 = Math.sin(angleHalf) * innerRadius;
+                    const x2 = Math.cos(angle2) * outerRadius;
+                    const y2 = Math.sin(angle2) * outerRadius;
+                    node.targetX = centerX + x1 + (x2 - x1) * subP;
+                    node.targetY = centerY + y1 + (y2 - y1) * subP;
+                }
             }
         });
     };

@@ -5,6 +5,9 @@ import '../../services/chat_provider.dart';
 import '../../models/group_model.dart';
 import '../../models/chat_model.dart';
 import '../../core/constants.dart';
+import '../../models/message_model.dart';
+import 'shared_media_screen.dart';
+import 'dart:io';
 
 class GroupInfoScreen extends StatefulWidget {
   final String groupId;
@@ -69,10 +72,12 @@ class _GroupInfoScreenState extends State<GroupInfoScreen> {
                     style: GoogleFonts.inter(color: AppColors.textMuted, fontSize: 14),
                   ),
                   const SizedBox(height: 16),
-                  _buildActionList(context, chatProvider, group),
-                  const SizedBox(height: 24),
-                  Text(
-                    'MEMBERS',
+                    _buildActionList(context, chatProvider, group),
+                    const SizedBox(height: 24),
+                    _buildMediaSection(context, chatProvider, group),
+                    const SizedBox(height: 24),
+                    Text(
+                      'MEMBERS',
                     style: GoogleFonts.inter(
                       color: AppColors.primaryLight,
                       fontWeight: FontWeight.bold,
@@ -241,6 +246,112 @@ class _GroupInfoScreenState extends State<GroupInfoScreen> {
           }
         );
       },
+    );
+  }
+
+  Widget _buildMediaSection(BuildContext context, ChatProvider provider, Group group) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Text(
+              'Media, Links, and Docs',
+              style: GoogleFonts.inter(
+                color: AppColors.primaryLight,
+                fontWeight: FontWeight.bold,
+                fontSize: 12,
+                letterSpacing: 1.2,
+              ),
+            ),
+            TextButton(
+              onPressed: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) => SharedMediaScreen(peerUuid: group.id, peerName: group.name),
+                  ),
+                );
+              },
+              child: Text('See all', style: GoogleFonts.inter(color: AppColors.primaryLight, fontWeight: FontWeight.w600, fontSize: 12)),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        FutureBuilder<List<Message>>(
+          future: provider.getSharedMedia(group.id, limit: 3),
+          builder: (context, snapshot) {
+            if (snapshot.connectionState == ConnectionState.waiting) {
+              return Container(
+                height: 80,
+                decoration: BoxDecoration(
+                  color: AppColors.surfaceDark,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: const Center(child: CircularProgressIndicator(strokeWidth: 2)),
+              );
+            }
+            
+            final mediaList = snapshot.data ?? [];
+            if (mediaList.isEmpty) {
+              return Container(
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(vertical: 24),
+                decoration: BoxDecoration(
+                  color: AppColors.surfaceDark,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Column(
+                  children: [
+                    Icon(Icons.photo_library_outlined, size: 24, color: AppColors.textMuted.withValues(alpha: 0.5)),
+                    const SizedBox(height: 8),
+                    Text(
+                      'No media shared yet',
+                      style: GoogleFonts.inter(fontSize: 12, color: AppColors.textMuted),
+                    ),
+                  ],
+                ),
+              );
+            }
+
+            return Row(
+              children: mediaList.map((msg) {
+                final isImage = msg.type == MessageType.image;
+                return Expanded(
+                  child: GestureDetector(
+                    onTap: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (context) => SharedMediaScreen(peerUuid: group.id, peerName: group.name),
+                        ),
+                      );
+                    },
+                    child: Container(
+                      height: 80,
+                      margin: const EdgeInsets.symmetric(horizontal: 4),
+                      decoration: BoxDecoration(
+                        color: AppColors.surfaceDark,
+                        borderRadius: BorderRadius.circular(8),
+                        image: isImage 
+                          ? DecorationImage(
+                              image: FileImage(File(msg.imagePath ?? msg.content)),
+                              fit: BoxFit.cover,
+                            )
+                          : null,
+                      ),
+                      child: !isImage 
+                        ? Center(child: Icon(Icons.insert_drive_file_outlined, color: AppColors.primaryLight, size: 20))
+                        : null,
+                    ),
+                  ),
+                );
+              }).toList(),
+            );
+          },
+        ),
+      ],
     );
   }
 }

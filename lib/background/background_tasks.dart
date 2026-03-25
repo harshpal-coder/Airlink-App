@@ -1,9 +1,11 @@
+import 'dart:ui';
 import 'package:workmanager/workmanager.dart';
 import 'package:flutter_background_service/flutter_background_service.dart';
 import 'package:flutter/foundation.dart';
 
 @pragma('vm:entry-point')
 void callbackDispatcher() {
+  DartPluginRegistrant.ensureInitialized();
   Workmanager().executeTask((task, inputData) async {
     debugPrint('[WorkManager] Executing task: $task');
     

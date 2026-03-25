@@ -122,8 +122,8 @@ class AdaptiveDiscoveryManager {
   void _applyArm(DiscoveryArm arm) {
     Duration interval;
     switch (arm) {
-      case DiscoveryArm.ultraAggressive: interval = const Duration(seconds: 15); break;
-      case DiscoveryArm.standard: interval = const Duration(minutes: 1); break;
+      case DiscoveryArm.ultraAggressive: interval = const Duration(seconds: 30); break;
+      case DiscoveryArm.standard: interval = const Duration(minutes: 2); break;
       case DiscoveryArm.powerSave: interval = const Duration(minutes: 5); break;
       case DiscoveryArm.hibernate: interval = const Duration(minutes: 15); break;
     }
