@@ -8,6 +8,7 @@ import '../../services/chat_provider.dart';
 import '../../core/constants.dart';
 import 'help_screen.dart';
 import '../../utils/background_utils.dart';
+import 'referral_screen.dart';
 
 class SettingsScreen extends StatelessWidget {
   const SettingsScreen({super.key});
@@ -228,6 +229,21 @@ class SettingsScreen extends StatelessWidget {
                       'Locking Guide',
                       'Keep AirLink alive in recent apps',
                       onTap: () => _showLockingGuide(context),
+                    ),
+                  ]),
+                  const SizedBox(height: 32),
+                  _buildSectionHeader('Share AirLink'),
+                  const SizedBox(height: 12),
+                  _buildSettingsCard([
+                    _buildSettingsTile(
+                      context,
+                      Icons.people_alt_rounded,
+                      'Invite Friends',
+                      'Help grow the community',
+                      onTap: () => Navigator.push(
+                        context,
+                        MaterialPageRoute(builder: (context) => const ReferralScreen()),
+                      ),
                     ),
                   ]),
                   const SizedBox(height: 32),

@@ -513,9 +513,13 @@ class ChatProvider extends ChangeNotifier with WidgetsBindingObserver {
     await discoveryService.disconnect(device);
   }
 
-  Future<void> sendMessage(String receiverUuid, String content, {Duration? burnDuration}) async {
+  Future<void> sendMessage(String receiverUuid, String content, {Duration? burnDuration, String? replyToId}) async {
     String peerName = _resolvePeerNameByUuid(receiverUuid);
-    await messagingService.sendTextMessage(receiverUuid, peerName, content, burnDuration: burnDuration);
+    await messagingService.sendTextMessage(receiverUuid, peerName, content, burnDuration: burnDuration, replyToId: replyToId);
+  }
+
+  Future<void> sendReaction(String receiverUuid, String messageId, String reaction) async {
+    await messagingService.sendReaction(receiverUuid, messageId, reaction);
   }
 
   Future<void> retryMessage(String messageId) async {

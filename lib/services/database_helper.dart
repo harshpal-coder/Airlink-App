@@ -1,3 +1,5 @@
+import 'dart:convert';
+import 'package:flutter/foundation.dart';
 import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart';
 import '../models/user_model.dart';
@@ -25,7 +27,7 @@ class DatabaseHelper {
 
     return await openDatabase(
       path,
-      version: 19,
+      version: 20,
       onCreate: _createDB,
       onUpgrade: _upgradeDB,
     );
@@ -63,7 +65,9 @@ class DatabaseHelper {
         imagePath TEXT,
         relayedVia TEXT,
         fileName TEXT,
-        fileSize INTEGER
+        fileSize INTEGER,
+        replyToId TEXT,
+        reactions TEXT
       )
     ''');
 
@@ -233,12 +237,12 @@ class DatabaseHelper {
           // Column may already exist
         }
       }
-      if (oldVersion < 19) {
+      if (oldVersion < 20) {
         try {
-          await db.execute('ALTER TABLE ${AppConstants.messageTable} ADD COLUMN fileName TEXT');
-          await db.execute('ALTER TABLE ${AppConstants.messageTable} ADD COLUMN fileSize INTEGER');
+          await db.execute('ALTER TABLE ${AppConstants.messageTable} ADD COLUMN replyToId TEXT');
+          await db.execute('ALTER TABLE ${AppConstants.messageTable} ADD COLUMN reactions TEXT');
         } catch (e) {
-          // Column may already exist
+          // Columns may already exist
         }
       }
     }
@@ -503,6 +507,40 @@ class DatabaseHelper {
       where: 'id = ?',
       whereArgs: [id],
     );
+  }
+
+  Future<void> updateMessageReactions(String id, Map<String, String>? reactions) async {
+    final db = await instance.database;
+    await db.update(
+      AppConstants.messageTable,
+      {'reactions': reactions != null ? jsonEncode(reactions) : null},
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+  }
+
+  Future<void> addMessageReaction(String messageId, String userUuid, String reaction) async {
+    final db = await instance.database;
+    final List<Map<String, dynamic>> results = await db.query(
+      AppConstants.messageTable,
+      columns: ['reactions'],
+      where: 'id = ?',
+      whereArgs: [messageId],
+    );
+
+    if (results.isNotEmpty) {
+      final String? reactionsJson = results.first['reactions'] as String?;
+      Map<String, String> reactions = {};
+      if (reactionsJson != null && reactionsJson.isNotEmpty) {
+        try {
+          reactions = Map<String, String>.from(jsonDecode(reactionsJson));
+        } catch (e) {
+          debugPrint('[DatabaseHelper] Error decoding reactions JSON: $e');
+        }
+      }
+      reactions[userUuid] = reaction;
+      await updateMessageReactions(messageId, reactions);
+    }
   }
 
   Future<Message?> getMessageByPayloadId(int payloadId) async {

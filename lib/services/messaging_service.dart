@@ -422,7 +422,20 @@ class MessagingService {
           incomingPayloadId: incomingPayloadId,
           expiresAt: expiresAt,
           hopCount: hopCount,
+          replyToId: payload['replyToId'],
+          reactions: payload['reactions'] != null 
+              ? Map<String, String>.from(payload['reactions']) 
+              : null,
         );
+      } else if (type == 'reaction') {
+        final String? reactMsgId = payload['messageId'];
+        final String? reaction = payload['reaction'];
+        if (reactMsgId != null && reaction != null && originalSenderUuid != null) {
+          await dbHelper.addMessageReaction(reactMsgId, originalSenderUuid, reaction);
+          _messageUpdatedController.add(originalSenderUuid);
+          debugPrint('[MessagingService] Received reaction $reaction for message $reactMsgId from $originalSenderUuid');
+        }
+        return;
       } else if (type == 'typing') {
         final bool isTyping = payload['isTyping'] == true;
         // Broadcast this locally to UI
@@ -879,7 +892,7 @@ class MessagingService {
   }
 
 
-  Future<void> _processIncomingText(String senderEndpointId, String text, {String? senderName, String? senderUuid, int? incomingPayloadId, DateTime? expiresAt, int? hopCount}) async {
+  Future<void> _processIncomingText(String senderEndpointId, String text, {String? senderName, String? senderUuid, int? incomingPayloadId, DateTime? expiresAt, int? hopCount, String? replyToId, Map<String, String>? reactions}) async {
     final User? me = await dbHelper.getUser('me');
     final String myUuid = me?.uuid ?? 'me';
     final msgId = const Uuid().v4();
@@ -895,6 +908,8 @@ class MessagingService {
       progress: 1.0,
       expiresAt: expiresAt,
       hopCount: hopCount ?? 0,
+      replyToId: replyToId,
+      reactions: reactions,
     );
     if (incomingPayloadId != null) _payloadToMessageId[incomingPayloadId] = msgId;
     await dbHelper.insertMessage(message);
@@ -934,7 +949,7 @@ class MessagingService {
     _messageUpdatedController.sink.add(senderUuid);
   }
 
-  Future<void> sendTextMessage(String receiverUuid, String receiverName, String content, {Duration? burnDuration}) async {
+  Future<void> sendTextMessage(String receiverUuid, String receiverName, String content, {Duration? burnDuration, String? replyToId}) async {
     final User? me = await dbHelper.getUser('me');
     final messageId = const Uuid().v4();
     String? encryptedPayload;
@@ -955,6 +970,7 @@ class MessagingService {
       'messageId': messageId,
       'hopCount': 0,
       'burnDuration': burnDuration?.inSeconds,
+      'replyToId': replyToId,
     });
 
     final message = Message(
@@ -968,6 +984,7 @@ class MessagingService {
       hopCount: 0,
       encryptedPayload: isEncrypted ? encryptedPayload : null,
       expiresAt: burnDuration != null ? DateTime.now().add(burnDuration) : null,
+      replyToId: replyToId,
     );
     
     await dbHelper.insertMessage(message);
@@ -1021,6 +1038,28 @@ class MessagingService {
       debugPrint('[MessagingService] Error in sendTextMessage: $e');
       await dbHelper.updateMessageStatus(messageId, MessageStatus.failed);
     }
+  }
+
+  Future<void> sendReaction(String receiverUuid, String messageId, String reaction) async {
+    final User? me = await dbHelper.getUser('me');
+    final String myUuid = me?.uuid ?? 'me';
+
+    final payload = {
+      'type': 'reaction',
+      'messageId': messageId,
+      'reaction': reaction,
+      'senderUuid': myUuid,
+      'targetUuid': receiverUuid,
+      'timestamp': DateTime.now().toIso8601String(),
+      'hopCount': 0,
+    };
+
+    await _relayMessage(receiverUuid, payload);
+    
+    // Update local DB
+    await dbHelper.addMessageReaction(messageId, myUuid, reaction);
+    _messageUpdatedController.add(receiverUuid);
+    debugPrint('[MessagingService] Sent reaction $reaction for message $messageId to $receiverUuid');
   }
 
 

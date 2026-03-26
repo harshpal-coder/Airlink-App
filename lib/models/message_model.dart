@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 enum MessageType { text, sos, audio, image, file }
 
 enum MessageStatus { sending, sent, delivered, read, failed, queued, relay }
@@ -22,6 +24,8 @@ class Message {
   final String? relayedVia;
   final String? fileName;
   final int? fileSize;
+  final String? replyToId;
+  final Map<String, String>? reactions;
 
   Message({
     required this.id,
@@ -43,6 +47,8 @@ class Message {
     this.relayedVia,
     this.fileName,
     this.fileSize,
+    this.replyToId,
+    this.reactions,
   });
 
   Map<String, dynamic> toMap() {
@@ -66,6 +72,8 @@ class Message {
       'relayedVia': relayedVia,
       'fileName': fileName,
       'fileSize': fileSize,
+      'replyToId': replyToId,
+      'reactions': reactions != null ? jsonEncode(reactions) : null,
     };
   }
 
@@ -90,6 +98,8 @@ class Message {
       relayedVia: map['relayedVia'] as String?,
       fileName: map['fileName'] as String?,
       fileSize: map['fileSize'] as int?,
+      replyToId: map['replyToId'] as String?,
+      reactions: map['reactions'] != null ? Map<String, String>.from(jsonDecode(map['reactions'])) : null,
     );
   }
 
@@ -113,6 +123,8 @@ class Message {
     String? relayedVia,
     String? fileName,
     int? fileSize,
+    String? replyToId,
+    Map<String, String>? reactions,
   }) {
     return Message(
       id: id ?? this.id,
@@ -134,6 +146,8 @@ class Message {
       relayedVia: relayedVia ?? this.relayedVia,
       fileName: fileName ?? this.fileName,
       fileSize: fileSize ?? this.fileSize,
+      replyToId: replyToId ?? this.replyToId,
+      reactions: reactions ?? this.reactions,
     );
   }
 }
