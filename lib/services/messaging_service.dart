@@ -1,8 +1,10 @@
 import 'dart:async';
+import 'dart:collection';
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter_image_compress/flutter_image_compress.dart';
 import 'package:nearby_connections/nearby_connections.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as p;
@@ -41,9 +43,11 @@ class MessagingService {
   final _messageUpdatedController = StreamController<String?>.broadcast();
   Stream<String?> get messageUpdated => _messageUpdatedController.stream;
 
-  // Cache to prevent re-relaying the same message ID (prevents infinite loops in mesh)
+  // Cache to prevent re-relaying the same message ID (prevents infinite loops in mesh).
+  // Uses a Queue for true FIFO LRU eviction — oldest IDs are removed first.
+  final Queue<String> _processedMessageQueue = Queue();
   final Set<String> _processedMessageIds = {};
-  static const int _maxCacheSize = 100;
+  static const int _maxCacheSize = 200;
 
   // Track message IDs for incoming/outgoing payloads
   final Map<int, String> _payloadToMessageId = {};
@@ -56,8 +60,12 @@ class MessagingService {
   final Map<String, Map<String, dynamic>> _meshNodeMetadata = {};
   Map<String, Map<String, dynamic>> get meshNodeMetadata => _meshNodeMetadata;
   
-  // Opportunistic buffer: targetUuid -> List of pending message payloads
-  final Map<String, List<Map<String, dynamic>>> _opportunisticBuffer = {};
+  // Opportunistic buffer: targetUuid -> List of {payload, enqueuedAt} waiting for a route.
+  // Capped at _maxOpportunisticPerPeer per target; entries expire after _opportunisticTtl.
+  final Map<String, List<_BufferedMessage>> _opportunisticBuffer = {};
+  static const int _maxOpportunisticPerPeer = 20;
+  static const Duration _opportunisticTtl = Duration(minutes: 30);
+  static const String _bufferPrefKey = 'airlink_opportunistic_buffer';
 
   final Map<String, List<String>> _activePaths = {};
   Map<String, List<String>> get activePaths => _activePaths;
@@ -66,20 +74,92 @@ class MessagingService {
   // SOS Alerts stream
   void _pruneStaleTopology() {
     final now = DateTime.now().millisecondsSinceEpoch;
-    final staleLimit = 1000 * 60 * 15; // 15 minutes
+    // FIX #5: Reduced from 15 min → 7 min so Dijkstra always works with fresh routes.
+    const staleLimit = 1000 * 60 * 7;
 
     _meshNodeMetadata.removeWhere((uuid, meta) {
       final lastUpdate = meta['lastUpdate'] as int? ?? 0;
       if (now - lastUpdate > staleLimit) {
         _meshTopology.remove(uuid);
+        debugPrint('[Topology] Pruned stale node: $uuid (last seen ${(now - lastUpdate) ~/ 60000}m ago)');
         return true;
       }
       return false;
     });
   }
 
+  /// Evicts TTL-expired entries from the opportunistic buffer.
+  void _pruneOpportunisticBuffer() {
+    final now = DateTime.now();
+    _opportunisticBuffer.removeWhere((uuid, messages) {
+      messages.removeWhere((m) => now.difference(m.enqueuedAt) > _opportunisticTtl);
+      return messages.isEmpty;
+    });
+  }
+
+  /// Persists the in-memory opportunistic buffer to SharedPreferences so
+  /// queued messages survive app restarts.  Entries older than [_opportunisticTtl]
+  /// are pruned before saving to avoid re-persisting dead payloads.
+  Future<void> _saveOpportunisticBuffer() async {
+    try {
+      _pruneOpportunisticBuffer();
+      final encoded = _opportunisticBuffer.map((uuid, msgs) => MapEntry(uuid, msgs.map((m) => {
+        'payload': m.payload,
+        'enqueuedAt': m.enqueuedAt.toIso8601String(),
+      }).toList()));
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_bufferPrefKey, json.encode(encoded));
+      debugPrint('[OpBuffer] Saved ${_opportunisticBuffer.length} target(s) to disk.');
+    } catch (e) {
+      debugPrint('[OpBuffer] Error saving buffer to disk: $e');
+    }
+  }
+
+  /// Restores the opportunistic buffer from SharedPreferences at startup.
+  /// Call this once from the app entry-point after [MessagingService] is ready.
+  /// Entries that have exceeded [_opportunisticTtl] are discarded automatically.
+  Future<void> restoreBufferFromDisk() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString(_bufferPrefKey);
+      if (raw == null) return;
+
+      final Map<String, dynamic> data = json.decode(raw);
+      final now = DateTime.now();
+      int restoredCount = 0;
+
+      for (final entry in data.entries) {
+        final targetUuid = entry.key;
+        final List<dynamic> msgs = entry.value as List<dynamic>;
+        final bucket = <_BufferedMessage>[];
+
+        for (final m in msgs) {
+          final enqueuedAt = DateTime.tryParse(m['enqueuedAt'] as String? ?? '') ?? DateTime(1970);
+          if (now.difference(enqueuedAt) <= _opportunisticTtl) {
+            bucket.add(_BufferedMessage(
+              payload: Map<String, dynamic>.from(m['payload'] as Map),
+              enqueuedAt: enqueuedAt,
+            ));
+            restoredCount++;
+          }
+        }
+
+        if (bucket.isNotEmpty) {
+          _opportunisticBuffer[targetUuid] = bucket;
+        }
+      }
+
+      debugPrint('[OpBuffer] Restored $restoredCount message(s) for ${_opportunisticBuffer.length} target(s) from disk.');
+    } catch (e) {
+      debugPrint('[OpBuffer] Error restoring buffer from disk: $e');
+    }
+  }
+
   void _flushOpportunisticBuffer() async {
     if (_opportunisticBuffer.isEmpty) return;
+
+    // Evict expired messages before flushing
+    _pruneOpportunisticBuffer();
 
     final targets = List<String>.from(_opportunisticBuffer.keys);
     for (var targetUuid in targets) {
@@ -88,8 +168,8 @@ class MessagingService {
         final messages = _opportunisticBuffer.remove(targetUuid);
         if (messages != null) {
           debugPrint('[Opportunistic] Path found to $targetUuid. Flushing ${messages.length} messages.');
-          for (var payload in messages) {
-            await _relayMessage(targetUuid, payload);
+          for (var buffered in messages) {
+            await _relayMessage(targetUuid, buffered.payload);
           }
         }
       }
@@ -132,6 +212,21 @@ class MessagingService {
     // Start heartbeat monitoring via the dedicated manager
     heartbeatManager.startMonitoring();
 
+    // IMP #8: Auto-send mesh_update when a new peer connects so every node
+    // learns the updated topology immediately (debounced 500ms to batch rapid
+    // multi-device joins into a single broadcast).
+    Timer? _meshUpdateDebounce;
+    discoveryService.onPeerConnected = (device) {
+      debugPrint('[MessagingService] Peer connected: ${device.deviceName}. Scheduling mesh_update.');
+      _meshUpdateDebounce?.cancel();
+      _meshUpdateDebounce = Timer(const Duration(milliseconds: 500), () async {
+        final connected = discoveryService.getConnectedDevices();
+        for (final peer in connected) {
+          await sendMeshUpdate(peer.deviceId);
+        }
+        _meshUpdateDebounce = null;
+      });
+    };
 
     // Register resend callback for the message queue manager
     messageQueueManager.onResendMessage = resendMessage;
@@ -369,12 +464,14 @@ class MessagingService {
         }
       }
 
-      // 3. Check deduplication
+      // 3. Check deduplication — LRU via Queue for proper oldest-first eviction (FIX #4)
       if (messageId != null) {
         if (_processedMessageIds.contains(messageId)) return;
         _processedMessageIds.add(messageId);
-        if (_processedMessageIds.length > _maxCacheSize) {
-          _processedMessageIds.remove(_processedMessageIds.first);
+        _processedMessageQueue.addLast(messageId);
+        if (_processedMessageQueue.length > _maxCacheSize) {
+          final oldest = _processedMessageQueue.removeFirst();
+          _processedMessageIds.remove(oldest);
         }
       }
 
@@ -506,8 +603,34 @@ class MessagingService {
             hopCount: hopCount,
           );
           
-          // Re-relay for mesh propagation (flooding)
-          _relayMessage('broadcast', payload, excludeEndpointId: senderId);
+          // IMP #7: Smart group relay — use Dijkstra per-member when topology
+          // is known; fall back to broadcast flood only for unreachable members.
+          final group = await dbHelper.getGroupById(groupId);
+          final me = await dbHelper.getUser('me');
+          final myUuid = me?.uuid ?? '';
+          final members = group?.members
+              .where((m) => m != myUuid && m != originalSenderUuid)
+              .toList() ?? [];
+
+          if (members.isNotEmpty && _meshTopology.isNotEmpty) {
+            // Send to each reachable member directly via Dijkstra
+            bool anyUnreachable = false;
+            for (final memberUuid in members) {
+              final hopId = await _findNextHop(memberUuid);
+              if (hopId != null && hopId != senderId) {
+                await discoveryService.sendMessageToEndpoint(hopId, json.encode({...payload, 'hopCount': hopCount + 1}));
+              } else {
+                anyUnreachable = true;
+              }
+            }
+            if (anyUnreachable) {
+              // Fallback flood for members we can't route to
+              _relayMessage('broadcast', payload, excludeEndpointId: senderId);
+            }
+          } else {
+            // No topology info yet — flood as before
+            _relayMessage('broadcast', payload, excludeEndpointId: senderId);
+          }
         }
       } else if (type == 'audio') {
         final String base64Content = payload['content'] as String;
@@ -780,7 +903,18 @@ class MessagingService {
   Future<({int? payloadId, String? nextHopName})> _relayMessage(String targetUuid, Map<String, dynamic> payload, {String? excludeEndpointId}) async {
     int hops = (payload['hopCount'] ?? 0) + 1;
     payload['hopCount'] = hops;
-    if (hops > 12) return (payloadId: null, nextHopName: null);
+
+    // FIX #2: Log hop-limit drops so they're visible in diagnostics.
+    // Max hops vary by message class: SOS=20, text=12, media=8.
+    final int maxHops = payload['priority'] == 1 ? 20 : (payload['type'] == 'text' ? 12 : 8);
+    if (hops > maxHops) {
+      debugPrint(
+        '[MeshRelay] ⛔ Dropped: message type="${payload['type']}" '
+        'from=${payload['senderUuid']} to=$targetUuid exceeded $maxHops hops (got $hops). '
+        'msgId=${payload['messageId']}',
+      );
+      return (payloadId: null, nextHopName: null);
+    }
 
     final String updatedPayload = json.encode(payload);
     
@@ -806,13 +940,39 @@ class MessagingService {
         final name = discoveryService.getDeviceById(nextHopEndpointId)?.deviceName;
         debugPrint('[MeshRelay] Path found for $targetUuid. Next hop: $nextHopEndpointId ($name) (hops: $hops)');
         final pid = await discoveryService.sendMessageToEndpoint(nextHopEndpointId, updatedPayload);
+
+        // IMP #6: Multi-path relay for important messages (priority == 2).
+        // A second copy travels via a distinct backup neighbor (sorted by battery
+        // descending) so delivery survives a single-link failure. Deduplication
+        // at the receiver prevents double-processing.
+        if (payload['priority'] == 2) {
+          final neighbors = discoveryService.getConnectedDevices()
+            ..sort((a, b) => b.batteryLevel.compareTo(a.batteryLevel));
+          final backup = neighbors.firstWhere(
+            (p) => p.deviceId != nextHopEndpointId && p.deviceId != excludeEndpointId,
+            orElse: () => neighbors.first,  // no-op if only 1 neighbour
+          );
+          if (backup.deviceId != nextHopEndpointId) {
+            debugPrint('[MeshRelay] Multi-path: sending backup copy via ${backup.deviceName}');
+            await discoveryService.sendMessageToEndpoint(backup.deviceId, updatedPayload);
+          }
+        }
+
         return (payloadId: pid, nextHopName: name);
       }
       
-      // 3. Buffer for later if no path (Opportunistic Buffering)
-      if (hops == 1) { // Only buffer if it's the first hop and no path found
-        debugPrint('[MeshRelay] No path for $targetUuid. Buffering message.');
-        _opportunisticBuffer.putIfAbsent(targetUuid, () => []).add(payload);
+      // 3. Buffer for later if no path (Opportunistic Buffering) — FIX #1: Cap + TTL
+      if (hops == 1) { // Only buffer on first hop
+        final bucket = _opportunisticBuffer.putIfAbsent(targetUuid, () => []);
+        if (bucket.length >= _maxOpportunisticPerPeer) {
+          // Drop the oldest entry to make room (FIFO)
+          final dropped = bucket.removeAt(0);
+          debugPrint('[Opportunistic] Buffer full for $targetUuid — dropped oldest (enqueued ${DateTime.now().difference(dropped.enqueuedAt).inMinutes}m ago).');
+        }
+        bucket.add(_BufferedMessage(payload: Map.from(payload), enqueuedAt: DateTime.now()));
+        debugPrint('[Opportunistic] Buffered message for $targetUuid (${bucket.length}/$_maxOpportunisticPerPeer in queue).');
+        // QW #12: Persist to disk on every write so killed/crashed app can resume delivery.
+        _saveOpportunisticBuffer();
         return (payloadId: null, nextHopName: null);
       }
       
@@ -835,9 +995,18 @@ class MessagingService {
     for (var peer in neighbors) {
       if (peer.deviceId == excludeEndpointId) continue;
       
-      // Signal Check: Don't relay heavily through extremely weak links
-      if (peer.rssi < -85 && !peer.isBackbone) { // Allow weak links if it's a backbone
-        debugPrint('[SmartRelay] Skipping weak link ${peer.deviceName} (${peer.rssi} dBm)');
+      // IMP #10: Use RTT-derived RSSI from HeartbeatManager when available;
+      // it is more current than the static RSSI field which only updates on
+      // explicit updateDeviceRssi() calls. Fall back to the device field.
+      final effectiveRssi = peer.uuid != null
+          ? (heartbeatManager.getLastRtt(peer.uuid!) != null
+              ? _rttToRssi(heartbeatManager.getLastRtt(peer.uuid!)!)
+              : peer.rssi)
+          : peer.rssi;
+
+      // Signal Check: Don't relay through extremely weak links unless backbone
+      if (effectiveRssi < -85 && !peer.isBackbone) {
+        debugPrint('[SmartRelay] Skipping weak link ${peer.deviceName} (RTT RSSI: ${effectiveRssi.toStringAsFixed(0)} dBm)');
         continue;
       }
 
@@ -851,6 +1020,15 @@ class MessagingService {
       firstFloodPid ??= pid;
     }
     return (payloadId: firstFloodPid, nextHopName: 'Mesh (Flood)');
+  }
+
+  /// IMP #10: Converts an RTT measurement (ms) to an estimated RSSI (dBm).
+  /// Matches the same mapping used in HeartbeatManager._estimateSignalQuality.
+  double _rttToRssi(int rttMs) {
+    if (rttMs < 100) return -45.0;
+    if (rttMs < 300) return -55.0;
+    if (rttMs < 800) return -70.0;
+    return -85.0;
   }
 
   Future<void> broadcastSOS({String content = "I need help! Immediate assistance required."}) async {
@@ -2241,4 +2419,15 @@ DijkstraResult? _dijkstraIsolate(DijkstraParams params) {
     cost: dist[targetUuid]!,
     nextHopDeviceId: nextHopDevice['deviceId'] as String?,
   );
+}
+
+/// A message held in the opportunistic buffer, together with the time it was
+/// enqueued.  The TTL check in [MessagingService._pruneOpportunisticBuffer]
+/// compares [DateTime.now().difference(enqueuedAt)] against
+/// [MessagingService._opportunisticTtl].
+class _BufferedMessage {
+  final Map<String, dynamic> payload;
+  final DateTime enqueuedAt;
+
+  _BufferedMessage({required this.payload, required this.enqueuedAt});
 }

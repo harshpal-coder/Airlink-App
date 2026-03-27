@@ -38,7 +38,9 @@ class HeartbeatManager {
   final DatabaseHelper _dbHelper = DatabaseHelper.instance;
 
   /// Number of missed pings before declaring a peer lost.
-  static const int _missThreshold = 2; // Reduced from 3
+  /// FIX #3: Raised from 2 → 3 to reduce false-positive ghost detection
+  /// on congested or momentarily busy Wi-Fi/BT radios.
+  static const int _missThreshold = 3;
 
   /// Tracks missed pings per peer UUID.
   final Map<String, int> _heartbeatMisses = {};

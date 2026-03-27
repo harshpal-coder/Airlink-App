@@ -75,6 +75,9 @@ void main() async {
   final messagingService = getIt<MessagingService>();
   final adaptiveDiscoveryManager = getIt<AdaptiveDiscoveryManager>();
 
+  // QW #12: Restore any messages that were buffered before the last app kill.
+  await messagingService.restoreBufferFromDisk();
+
   // Start standalone monitoring services
   motionService.start();
   adaptiveDiscoveryManager.start();

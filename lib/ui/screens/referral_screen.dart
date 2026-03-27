@@ -8,9 +8,11 @@ import '../../core/constants.dart';
 class ReferralScreen extends StatelessWidget {
   const ReferralScreen({super.key});
 
-  final String _appLink = 'https://airlink.app'; // Placeholder, user can update this
+  final String _appLink =
+      'https://myairlink.vercel.app'; // Placeholder, user can update this
   final String _referralTitle = 'AirLink - Secure P2P Mesh Messaging';
-  final String _referralMsg = 'Check out AirLink! It\'s a secure, peer-to-peer mesh messaging app that works even without the internet. Download it here: ';
+  final String _referralMsg =
+      'Check out AirLink! It\'s a secure, peer-to-peer mesh messaging app that works even without the internet. Download it here: ';
 
   Future<void> _shareApp(BuildContext context) async {
     try {
@@ -54,7 +56,11 @@ class ReferralScreen extends StatelessWidget {
             pinned: true,
             expandedHeight: 200,
             leading: IconButton(
-              icon: const Icon(Icons.arrow_back_ios_new_rounded, color: Colors.white, size: 20),
+              icon: const Icon(
+                Icons.arrow_back_ios_new_rounded,
+                color: Colors.white,
+                size: 20,
+              ),
               onPressed: () => Navigator.pop(context),
             ),
             flexibleSpace: FlexibleSpaceBar(
@@ -215,7 +221,11 @@ class ReferralScreen extends StatelessWidget {
         ),
         child: Row(
           children: [
-            const Icon(Icons.link_rounded, color: AppColors.primaryLight, size: 20),
+            const Icon(
+              Icons.link_rounded,
+              color: AppColors.primaryLight,
+              size: 20,
+            ),
             const SizedBox(width: 12),
             Expanded(
               child: Text(
@@ -229,7 +239,11 @@ class ReferralScreen extends StatelessWidget {
               ),
             ),
             const SizedBox(width: 12),
-            const Icon(Icons.copy_rounded, color: AppColors.textMuted, size: 20),
+            const Icon(
+              Icons.copy_rounded,
+              color: AppColors.textMuted,
+              size: 20,
+            ),
           ],
         ),
       ),

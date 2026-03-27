@@ -71,6 +71,11 @@ class DiscoveryService {
   /// Used by ReconnectionManager to trigger an immediate reconnect attempt.
   void Function(Device)? onDirectDisconnect;
 
+  /// Callback invoked when any peer reaches [SessionState.connected].
+  /// Used by MessagingService to auto-send a mesh_update immediately after
+  /// a connection is established — accelerates topology convergence.
+  void Function(Device)? onPeerConnected;
+
   /// Callback invoked when a reconnection effort needs more aggressive scanning.
   void Function()? onBoostDiscovery;
 
@@ -283,13 +288,13 @@ class DiscoveryService {
                 debugPrint(
                   '[DiscoveryService] Found known device "$displayName" ($discoveredUuid). Tie-breaker LOST. Waiting 100ms for peer...',
                 );
-                // Short fallback: if peer hasn't connected in 100ms, both try simultaneously.
-                // Nearby handles the collision — no harm in both sides initiating.
-                Future.delayed(const Duration(milliseconds: 100), () {
+                // IMP #9: Wider fallback window (100ms → 400ms) gives the
+                // peer-side adequate time to initiate on congested BT radios.
+                Future.delayed(const Duration(milliseconds: 400), () {
                   final idx = _devices.indexWhere((d) => d.deviceId == id);
                   if (idx >= 0 && _devices[idx].state == SessionState.notConnected) {
                     debugPrint(
-                      '[DiscoveryService] Peer did not connect within 100ms. Initiating as fallback...',
+                      '[DiscoveryService] Peer did not connect within 400ms. Initiating as fallback...',
                     );
                     connect(_devices[idx]);
                   }
@@ -424,6 +429,11 @@ class DiscoveryService {
               _reputationService.recordConnectionEvent(uuid, true);
             }
             updateDeviceState(id, SessionState.connected);
+            // IMP #8: Notify MessagingService so it can send an immediate mesh_update.
+            final connectedDevice = getDeviceById(id);
+            if (connectedDevice != null) {
+              onPeerConnected?.call(connectedDevice);
+            }
           } else {
             if (uuid != null) {
               _reputationService.recordConnectionEvent(uuid, false);
@@ -576,6 +586,11 @@ class DiscoveryService {
               _reputationService.recordConnectionEvent(uuid, true);
             }
             updateDeviceState(id, SessionState.connected);
+            // IMP #8: Notify MessagingService so it can send an immediate mesh_update.
+            final connectedDevice = getDeviceById(id);
+            if (connectedDevice != null) {
+              onPeerConnected?.call(connectedDevice);
+            }
           } else {
             if (uuid != null) {
               _reputationService.recordConnectionEvent(uuid, false);
