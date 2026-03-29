@@ -10,6 +10,7 @@ import 'services/messaging_service.dart';
 import 'services/peer_ai_service.dart';
 import 'services/notification_service.dart';
 import 'services/chat_provider.dart';
+import 'ui/providers/call_provider.dart';
 import 'services/heartbeat_manager.dart';
 import 'services/reconnection_manager.dart';
 import 'services/reputation_service.dart';
@@ -27,6 +28,8 @@ import 'ui/screens/profile_setup_screen.dart';
 import 'ui/screens/main_screen.dart';
 import 'ui/screens/discovery_screen.dart';
 import 'ui/screens/chat_screen.dart';
+import 'ui/screens/incoming_call_screen.dart';
+import 'ui/screens/in_call_screen.dart';
 import 'ui/screens/settings_screen.dart';
 import 'ui/screens/network_map_screen.dart';
 import 'ui/screens/qr_link_screen.dart';
@@ -194,9 +197,40 @@ class MyApp extends StatelessWidget {
             chatRepository: getIt<ChatRepository>(),
           ),
         ),
+        ChangeNotifierProvider(
+          create: (_) => CallProvider(
+            discoveryService: getIt<DiscoveryService>(),
+            messagingService: getIt<MessagingService>(),
+          ),
+        ),
       ],
       child: MaterialApp(
         title: 'Airlink',
+        builder: (context, child) {
+          return Stack(
+            children: [
+              ?child,
+              Consumer<CallProvider>(
+                builder: (context, callProvider, _) {
+                  if (callProvider.callState == CallState.ringing && !callProvider.isOutgoing) {
+                    return IncomingCallScreen(
+                      callerName: callProvider.peerName ?? 'Unknown',
+                      callerAvatar: null,
+                    );
+                  }
+                  if (callProvider.callState == CallState.inCall) {
+                    return InCallScreen(
+                      peerName: callProvider.peerName ?? 'Unknown',
+                      peerAvatar: null,
+                      isOutgoing: callProvider.isOutgoing,
+                    );
+                  }
+                  return const SizedBox.shrink();
+                },
+              ),
+            ],
+          );
+        },
         debugShowCheckedModeBanner: false,
         theme: AppTheme.darkTheme,
         initialRoute: '/',

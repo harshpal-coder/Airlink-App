@@ -48,6 +48,9 @@ dependencies:
   get_it: 8.0.2
   event_bus: 2.0.0
   share_plus: ^10.1.4
+  flutter_sound: ^9.30.0
+  logger: ^2.7.0
+  audio_session: ^0.2.3
 
 dev_dependencies:
   flutter_test:

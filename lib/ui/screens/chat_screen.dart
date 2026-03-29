@@ -17,6 +17,7 @@ import '../../core/constants.dart';
 import 'user_profile_screen.dart';
 import 'image_viewer_screen.dart';
 import 'security_screen.dart';
+import '../providers/call_provider.dart';
 
 class ChatScreen extends StatefulWidget {
   final String peerUuid;
@@ -294,6 +295,16 @@ class _ChatScreenState extends State<ChatScreen> {
           ),
         ),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.phone, size: 22, color: AppColors.primary),
+            tooltip: 'Voice Call',
+            onPressed: () {
+              context.read<CallProvider>().makeCall(
+                widget.peerUuid,
+                widget.peerName,
+              );
+            },
+          ),
           IconButton(
             icon: const Icon(Icons.lock_outline, size: 22, color: AppColors.primary),
             tooltip: 'End-to-End Encrypted',

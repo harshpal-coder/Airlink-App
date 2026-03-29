@@ -43,6 +43,9 @@ class MessagingService {
   final _messageUpdatedController = StreamController<String?>.broadcast();
   Stream<String?> get messageUpdated => _messageUpdatedController.stream;
 
+  final _callSignalController = StreamController<Map<String, dynamic>>.broadcast();
+  Stream<Map<String, dynamic>> get callSignalReceived => _callSignalController.stream;
+
   // Cache to prevent re-relaying the same message ID (prevents infinite loops in mesh).
   // Uses a Queue for true FIFO LRU eviction — oldest IDs are removed first.
   final Queue<String> _processedMessageQueue = Queue();
@@ -215,16 +218,16 @@ class MessagingService {
     // IMP #8: Auto-send mesh_update when a new peer connects so every node
     // learns the updated topology immediately (debounced 500ms to batch rapid
     // multi-device joins into a single broadcast).
-    Timer? _meshUpdateDebounce;
+    Timer? meshUpdateDebounce;
     discoveryService.onPeerConnected = (device) {
       debugPrint('[MessagingService] Peer connected: ${device.deviceName}. Scheduling mesh_update.');
-      _meshUpdateDebounce?.cancel();
-      _meshUpdateDebounce = Timer(const Duration(milliseconds: 500), () async {
+      meshUpdateDebounce?.cancel();
+      meshUpdateDebounce = Timer(const Duration(milliseconds: 500), () async {
         final connected = discoveryService.getConnectedDevices();
         for (final peer in connected) {
           await sendMeshUpdate(peer.deviceId);
         }
-        _meshUpdateDebounce = null;
+        meshUpdateDebounce = null;
       });
     };
 
@@ -268,6 +271,7 @@ class MessagingService {
     _sosAlertController.close();
     _typingController.close();
     _connectionQualityController.close();
+    _callSignalController.close();
     heartbeatManager.stopMonitoring();
     _cleanupTimer?.cancel();
     _gossipTimer?.cancel();
@@ -734,10 +738,19 @@ class MessagingService {
           senderName: originalSenderName,
           senderUuid: originalSenderUuid,
         );
+      } else if (type == 'call_signal') {
+        final String? signal = payload['signal'];
+        if (targetUuid == myUuid && signal != null && originalSenderUuid != null) {
+          _callSignalController.add({
+            'signal': signal,
+            'senderUuid': originalSenderUuid,
+            'senderName': originalSenderName,
+          });
+        }
       }
 
       // Send Mesh ACK if this message was for me and had a messageId
-      if (targetUuid == myUuid && messageId != null && type != 'mesh_ack' && type != 'typing' && type != 'ping' && type != 'pong' && type != 'battery_update' && type != 'mesh_update') {
+      if (targetUuid == myUuid && messageId != null && type != 'mesh_ack' && type != 'typing' && type != 'ping' && type != 'pong' && type != 'battery_update' && type != 'mesh_update' && type != 'call_signal') {
         _sendMeshAck(originalSenderUuid ?? senderId, messageId);
       }
     } catch (e) {
@@ -777,6 +790,31 @@ class MessagingService {
       await discoveryService.sendMessageToEndpoint(endpointId, payload);
     } catch (e) {
       debugPrint('[MessagingService] Error sending reputation gossip: $e');
+    }
+  }
+
+  Future<void> sendCallSignal(String targetUuid, String signalType) async {
+    try {
+      final User? me = await dbHelper.getUser('me');
+      final Map<String, dynamic> payloadMap = {
+        'type': 'call_signal',
+        'signal': signalType, // 'request', 'accept', 'reject', 'end'
+        'senderUuid': me?.uuid ?? 'me',
+        'senderName': me?.deviceName ?? 'Unknown',
+        'targetUuid': targetUuid,
+        'messageId': const Uuid().v4(),
+        'hopCount': 0,
+      };
+      final String payload = json.encode(payloadMap);
+
+      final hopId = await _findNextHop(targetUuid);
+      if (hopId != null) {
+        await discoveryService.sendMessageToEndpoint(hopId, payload);
+      } else {
+        await _relayMessage('broadcast', payloadMap);
+      }
+    } catch (e) {
+      debugPrint('[MessagingService] Error sending call signal: $e');
     }
   }
 

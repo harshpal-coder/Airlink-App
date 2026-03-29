@@ -52,6 +52,9 @@ class DiscoveryService {
   final _fileReceivedController = StreamController<Map<String, dynamic>>.broadcast();
   Stream<Map<String, dynamic>> get fileReceived => _fileReceivedController.stream;
 
+  final _audioChunkController = StreamController<Map<String, dynamic>>.broadcast();
+  Stream<Map<String, dynamic>> get audioChunkReceived => _audioChunkController.stream;
+
   final ReputationService _reputationService;
   final PeerAIService _aiService;
   final Map<String, DateTime> _connectionStartTimes = {};
@@ -382,6 +385,16 @@ class DiscoveryService {
               );
               if (payload.type == PayloadType.BYTES) {
                 Uint8List bytes = payload.bytes!;
+                
+                // Audio chunk check: magic header [0, 1, 2, 3]
+                if (bytes.length > 4 && bytes[0] == 0 && bytes[1] == 1 && bytes[2] == 2 && bytes[3] == 3) {
+                  _audioChunkController.sink.add({
+                    'senderId': endpointId,
+                    'chunk': bytes.sublist(4),
+                  });
+                  return; // Bypass string decoding
+                }
+
                 String str;
                 
                 if (bytes.length > 2 && bytes[0] == 0x1f && bytes[1] == 0x8b) {
@@ -537,6 +550,16 @@ class DiscoveryService {
               );
               if (payload.type == PayloadType.BYTES) {
                 Uint8List bytes = payload.bytes!;
+                
+                // Audio chunk check: magic header [0, 1, 2, 3]
+                if (bytes.length > 4 && bytes[0] == 0 && bytes[1] == 1 && bytes[2] == 2 && bytes[3] == 3) {
+                  _audioChunkController.sink.add({
+                    'senderId': endpointId,
+                    'chunk': bytes.sublist(4),
+                  });
+                  return; // Bypass string decoding
+                }
+
                 String str;
                 
                 // GZIP Consistency Fix: Check for magic bytes
@@ -638,6 +661,22 @@ class DiscoveryService {
       updateDeviceState(device.deviceId, SessionState.notConnected);
     } catch (e) {
       debugPrint('Disconnect error: $e');
+    }
+  }
+
+  Future<int?> sendAudioChunkToEndpoint(String endpointId, Uint8List chunk) async {
+    try {
+      final header = Uint8List.fromList([0, 1, 2, 3]);
+      final payloadBytes = Uint8List(header.length + chunk.length);
+      payloadBytes.setAll(0, header);
+      payloadBytes.setAll(header.length, chunk);
+      
+      final payloadId = DateTime.now().millisecondsSinceEpoch;
+      await Nearby().sendBytesPayload(endpointId, payloadBytes);
+      return payloadId;
+    } catch (e) {
+      debugPrint('Error sending audio chunk: $e');
+      return null;
     }
   }
 
