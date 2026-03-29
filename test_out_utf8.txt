@@ -1,4 +1,0 @@
-﻿--- Signal Signature Verification FAIL Case Testing ---
-Verifying with data from failed test...
-Verification Result: false
-FAILURE: Signature is truly invalid even in isolation.
