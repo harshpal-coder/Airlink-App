@@ -150,7 +150,13 @@ class SharedMediaScreen extends StatelessWidget {
         final fileSize = msg.fileSize != null ? _formatBytes(msg.fileSize!) : '';
         
         return ListTile(
-          onTap: () => provider.openFile(msg.content),
+          onTap: () {
+            if (msg.imagePath != null) {
+              provider.openFile(msg.imagePath!);
+            } else {
+              provider.openFile(msg.content);
+            }
+          },
           contentPadding: EdgeInsets.zero,
           leading: Container(
             padding: const EdgeInsets.all(12),

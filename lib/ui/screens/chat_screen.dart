@@ -1017,8 +1017,8 @@ class _AudioMessageBubbleState extends State<_AudioMessageBubble> {
               if (_isPlaying) {
                 await _audioPlayer.pause();
               } else {
-                if (widget.message.imagePath != null) {
-                  await _audioPlayer.play(DeviceFileSource(widget.message.imagePath!));
+                if (widget.message.content.isNotEmpty) {
+                  await _audioPlayer.play(DeviceFileSource(widget.message.content));
                 }
               }
               setState(() => _isPlaying = !_isPlaying);
@@ -1096,36 +1096,44 @@ class _FileMessageBubble extends StatelessWidget {
   Widget build(BuildContext context) {
     final fileName = message.fileName ?? "File";
     final fileSize = message.fileSize ?? 0;
+    final filePath = message.imagePath;
 
-    return Container(
-      width: 200,
-      padding: const EdgeInsets.all(8),
-      decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.1),
-        borderRadius: BorderRadius.circular(10),
-      ),
-      child: Row(
-        children: [
-          Icon(Icons.insert_drive_file, color: isMe ? Colors.white : AppColors.primary),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  fileName,
-                  style: GoogleFonts.inter(fontSize: 13, color: isMe ? Colors.white : AppColors.textPrimary, fontWeight: FontWeight.w500),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-                Text(
-                  _formatBytes(fileSize),
-                  style: GoogleFonts.inter(fontSize: 10, color: isMe ? Colors.white70 : AppColors.textMuted),
-                ),
-              ],
+    return GestureDetector(
+      onTap: () {
+        if (filePath != null) {
+          Provider.of<ChatProvider>(context, listen: false).openFile(filePath);
+        }
+      },
+      child: Container(
+        width: 200,
+        padding: const EdgeInsets.all(8),
+        decoration: BoxDecoration(
+          color: Colors.white.withValues(alpha: 0.1),
+          borderRadius: BorderRadius.circular(10),
+        ),
+        child: Row(
+          children: [
+            Icon(Icons.insert_drive_file, color: isMe ? Colors.white : AppColors.primary),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    fileName,
+                    style: GoogleFonts.inter(fontSize: 13, color: isMe ? Colors.white : AppColors.textPrimary, fontWeight: FontWeight.w500),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  Text(
+                    _formatBytes(fileSize),
+                    style: GoogleFonts.inter(fontSize: 10, color: isMe ? Colors.white70 : AppColors.textMuted),
+                  ),
+                ],
+              ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
