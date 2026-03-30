@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter_background_service/flutter_background_service.dart';
+import 'package:intl/intl.dart';
 
 @pragma('vm:entry-point')
 class AirLinkConnectivityService {
@@ -70,7 +71,7 @@ class AirLinkConnectivityService {
         service.invoke('save_connection_state');
 
         final now = DateTime.now();
-        final timeString = "${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}:${now.second.toString().padLeft(2, '0')}";
+        final timeString = DateFormat('hh:mm:ss a').format(now);
 
         service.setForegroundNotificationInfo(
           title: "AirLink Active",

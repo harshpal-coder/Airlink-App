@@ -809,7 +809,7 @@ class _MessageBubble extends StatelessWidget {
               mainAxisSize: MainAxisSize.min,
               children: [
                 Text(
-                  DateFormat('HH:mm').format(message.timestamp),
+                  DateFormat('hh:mm a').format(message.timestamp),
                   style: GoogleFonts.inter(fontSize: 10, color: AppColors.textMuted),
                 ),
                 if (isMe) ...[
