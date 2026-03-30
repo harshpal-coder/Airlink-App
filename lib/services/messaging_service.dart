@@ -2073,7 +2073,7 @@ class MessagingService {
   }
 
   Future<void> saveConnectionToChat(String peerUuid, String peerName) async {
-    await _updateChatRecord(peerUuid, null, DateTime.now(), 0, peerName: peerName);
+    await _updateChatRecord(peerUuid, null, null, 0, peerName: peerName);
     _messageUpdatedController.sink.add(null);
   }
 
