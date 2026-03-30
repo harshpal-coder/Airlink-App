@@ -7,6 +7,7 @@ import 'package:google_fonts/google_fonts.dart';
 import '../../services/chat_provider.dart';
 import '../../core/constants.dart';
 import '../widgets/profile_preview_dialog.dart';
+import '../../models/message_model.dart';
 
 class ChatListScreen extends StatefulWidget {
   const ChatListScreen({super.key});
@@ -433,17 +434,36 @@ class _ChatTile extends StatelessWidget {
                                           fontStyle: FontStyle.italic,
                                         ),
                                       )
-                                    : Text(
-                                        (chat.lastMessage == 'Device connected' || chat.lastMessage == 'Connected' || chat.lastMessage.isEmpty)
-                                            ? 'Initial connection established'
-                                            : chat.lastMessage,
-                                        maxLines: 1,
-                                        overflow: TextOverflow.ellipsis,
-                                        style: GoogleFonts.inter(
-                                          color: (chat.unreadCount ?? 0) > 0 ? AppColors.textPrimary : AppColors.textSecondary,
-                                          fontSize: 14,
-                                          fontWeight: (chat.unreadCount ?? 0) > 0 ? FontWeight.w500 : FontWeight.normal,
-                                        ),
+                                    : Row(
+                                        children: [
+                                          if (chat.lastMessageIsMe == true && chat.lastMessageStatus != null)
+                                            Padding(
+                                              padding: const EdgeInsets.only(right: 6),
+                                              child: Icon(
+                                                chat.lastMessageStatus == MessageStatus.delivered.index || chat.lastMessageStatus == MessageStatus.read.index
+                                                    ? Icons.done_all
+                                                    : Icons.done,
+                                                size: 16,
+                                                color: chat.lastMessageStatus == MessageStatus.read.index
+                                                    ? AppColors.primary
+                                                    : AppColors.textMuted,
+                                              ),
+                                            ),
+                                          Expanded(
+                                            child: Text(
+                                              (chat.lastMessage == 'Device connected' || chat.lastMessage == 'Connected' || chat.lastMessage.isEmpty)
+                                                  ? 'Initial connection established'
+                                                  : chat.lastMessage,
+                                              maxLines: 1,
+                                              overflow: TextOverflow.ellipsis,
+                                              style: GoogleFonts.inter(
+                                                color: (chat.unreadCount ?? 0) > 0 ? AppColors.textPrimary : AppColors.textSecondary,
+                                                fontSize: 14,
+                                                fontWeight: (chat.unreadCount ?? 0) > 0 ? FontWeight.w500 : FontWeight.normal,
+                                              ),
+                                            ),
+                                          ),
+                                        ],
                                       ),
                               ),
                               if ((chat.unreadCount ?? 0) > 0)

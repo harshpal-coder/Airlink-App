@@ -422,8 +422,20 @@ class ChatProvider extends ChangeNotifier with WidgetsBindingObserver {
   }
 
   Future<void> loadChats() async {
-    chats = await dbHelper.getChats();
-    // Sort chats by name or time if needed, but DB currently does by time DESC
+    final loadedChats = await dbHelper.getChats();
+    
+    if (currentUser != null) {
+      for (int i = 0; i < loadedChats.length; i++) {
+        final lastMsgs = await dbHelper.getRecentMessages(loadedChats[i].peerUuid, currentUser!.uuid, limit: 1);
+        if (lastMsgs.isNotEmpty) {
+          loadedChats[i] = loadedChats[i].copyWith(
+            lastMessageStatus: lastMsgs.first.status.index,
+            lastMessageIsMe: lastMsgs.first.senderUuid == currentUser!.uuid,
+          );
+        }
+      }
+    }
+    chats = loadedChats;
     notifyListeners();
   }
 
