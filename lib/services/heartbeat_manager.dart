@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import '../utils/connectivity_logger.dart';
+import '../models/device_model.dart';
 import 'discovery_service.dart';
 import 'database_helper.dart';
 import '../core/event_bus.dart';
@@ -54,6 +55,11 @@ class HeartbeatManager {
 
   final _eventController = StreamController<HeartbeatEvent>.broadcast();
   Stream<HeartbeatEvent> get events => _eventController.stream;
+
+  /// Called when a **known** peer (contact) hits the miss threshold.
+  /// Wired up by [ReconnectionManager.installOn] so the reconnect loop
+  /// starts immediately instead of silently degrading the link.
+  void Function(Device)? onGhostDetected;
 
   HeartbeatManager({required DiscoveryService discoveryService})
       : _discoveryService = discoveryService;
@@ -136,18 +142,22 @@ class HeartbeatManager {
         _heartbeatMisses.remove(peer.uuid);
 
         if (knownUuids.contains(peer.uuid)) {
-          // Known peer: don't force-disconnect. The OS-level socket drop will
-          // surface naturally. Resetting the miss counter gives it a fresh window.
+          // Known peer: don't force-disconnect, but DO notify the
+          // ReconnectionManager so it starts a reconnect loop. The OS-level
+          // socket drop will surface naturally; this re-check means we don't
+          // wait the full OS timeout (up to 60s) before re-attempting.
           ConnectivityLogger.info(
             LogCategory.heartbeat,
-            'Known peer ${peer.deviceName} — skipping active disconnect to avoid churn',
+            'Known peer ${peer.deviceName} — heartbeat silent, triggering reconnect loop',
           );
           _eventController.add(HeartbeatEvent(
             uuid: peer.uuid!,
             deviceName: peer.deviceName,
             type: HeartbeatEventType.peerDegraded,
-            data: {'missedPings': misses, 'suppressed': true},
+            data: {'missedPings': misses, 'reconnectTriggered': true},
           ));
+          // Notify ReconnectionManager to begin a reconnect cycle.
+          onGhostDetected?.call(peer);
         } else {
           _discoveryService.disconnect(peer);
           _eventController.add(HeartbeatEvent(

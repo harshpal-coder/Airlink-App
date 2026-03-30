@@ -4,6 +4,8 @@ import '../models/message_model.dart';
 import 'database_helper.dart';
 import 'discovery_service.dart';
 import '../models/session_state.dart';
+import '../core/event_bus.dart';
+import '../core/app_events.dart';
 
 /// Persistent message queue with guaranteed delivery.
 ///
@@ -150,6 +152,27 @@ class MessageQueueManager {
   /// Clear all retry counts (useful on app restart).
   void clearRetryCounts() {
     _retryCounts.clear();
+  }
+
+  /// Wire this manager to the global event bus.
+  ///
+  /// When [ReconnectSucceededEvent] fires, immediately flushes all queued
+  /// messages for that peer so they are delivered within milliseconds of
+  /// the connection being restored — not on the next manual send attempt.
+  ///
+  /// Call this **once** from your injection / setup code after
+  /// [ReconnectionManager.installOn] has been called.
+  void installOn() {
+    appEventBus.on<ReconnectSucceededEvent>().listen((event) {
+      ConnectivityLogger.info(
+        LogCategory.messageQueue,
+        'ReconnectSucceededEvent for ${event.deviceName} — flushing queued messages',
+      );
+      // Small delay to let the transport layer fully stabilise before sending.
+      Future.delayed(const Duration(milliseconds: 200), () {
+        processQueueForPeer(event.uuid);
+      });
+    });
   }
 
   void dispose() {

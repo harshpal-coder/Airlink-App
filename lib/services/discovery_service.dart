@@ -8,6 +8,7 @@ import '../models/device_model.dart';
 import 'package:flutter/foundation.dart';
 import 'reputation_service.dart';
 import 'peer_ai_service.dart';
+import 'connection_lock.dart';
 import '../utils/connectivity_logger.dart';
 
 import '../models/session_state.dart';
@@ -81,6 +82,11 @@ class DiscoveryService {
 
   /// Callback invoked when a reconnection effort needs more aggressive scanning.
   void Function()? onBoostDiscovery;
+
+  /// Callback invoked when a connection is definitively confirmed (including via
+  /// the STATUS_ALREADY_CONNECTED_TO_ENDPOINT exception path).
+  /// Used by [ReconnectionManager] to clear its retry loop for this UUID.
+  void Function(String uuid)? onConnectionRestored;
 
   void boostDiscovery() {
     ConnectivityLogger.debug(LogCategory.discovery, 'Reconnection manager requested discovery boost');
@@ -513,6 +519,16 @@ class DiscoveryService {
       }
     }
 
+    // Gap #1 — UUID-scoped mutex: prevent duplicate requestConnection calls
+    // when onEndpointFound and ReconnectionManager._attemptReconnect race.
+    final lockUuid = device.uuid ?? device.deviceId;
+    if (!ConnectionLock.acquire(lockUuid)) {
+      debugPrint(
+        '[DiscoveryService] ConnectionLock held for $lockUuid — skipping duplicate connect()',
+      );
+      return;
+    }
+
     debugPrint(
       '[DiscoveryService] Requesting connection to ${device.deviceName} (${device.deviceId})',
     );
@@ -644,6 +660,11 @@ class DiscoveryService {
       if (errStr.contains('STATUS_ALREADY_CONNECTED_TO_ENDPOINT')) {
         debugPrint('[DiscoveryService] Already connected to ${device.deviceName}. Updating state.');
         updateDeviceState(device.deviceId, SessionState.connected);
+        // Gap #3: Inform ReconnectionManager so it clears its retry loop.
+        // Without this, the backoff loop runs forever even though we're connected.
+        if (device.uuid != null) {
+          onConnectionRestored?.call(device.uuid!);
+        }
       } else if (errStr.contains('STATUS_ENDPOINT_IO_ERROR')) {
         // IO error often means both sides tried simultaneously — don't mark
         // as disconnected, just leave state alone and let the next scan retry.
@@ -652,6 +673,9 @@ class DiscoveryService {
       } else {
         updateDeviceState(device.deviceId, SessionState.notConnected);
       }
+    } finally {
+      // Always release the lock so future connect() calls can proceed.
+      ConnectionLock.release(lockUuid);
     }
   }
 
@@ -848,6 +872,8 @@ class DiscoveryService {
       await stopAdvertising();
       await stopDiscovery();
       await Nearby().stopAllEndpoints();
+      // Release all connection locks so future connect() calls aren't permanently blocked.
+      ConnectionLock.releaseAll();
     } catch (e) {
       debugPrint('[DiscoveryService] Error stopping all: $e');
     }

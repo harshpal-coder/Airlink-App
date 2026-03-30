@@ -4,6 +4,7 @@ import '../models/device_model.dart';
 import '../models/session_state.dart';
 import '../utils/connectivity_logger.dart';
 import 'discovery_service.dart';
+import 'heartbeat_manager.dart';
 import 'reputation_service.dart';
 import '../core/event_bus.dart';
 import '../core/app_events.dart';
@@ -75,7 +76,11 @@ class ReconnectionManager {
 
   /// Wire this manager into [discoveryService] so that direct peer disconnections
   /// immediately schedule a reconnect (attempt 0 = instant, no delay).
-  void installOn(DiscoveryService discoveryService) {
+  ///
+  /// Also wires [heartbeatManager.onGhostDetected] and subscribes to the
+  /// global [PeerLostEvent] so every disconnect path funnels here.
+  void installOn(DiscoveryService discoveryService, {HeartbeatManager? heartbeatManager}) {
+    // 1. OS-level disconnect (most common)
     discoveryService.onDirectDisconnect = (device) {
       ConnectivityLogger.info(
         LogCategory.reconnection,
@@ -83,11 +88,68 @@ class ReconnectionManager {
       );
       scheduleReconnect(device);
     };
-    
-    // Periodically sync known devices (every 2 mins) to catch devices that 
+
+    // 2. Heartbeat ghost detection on unknown peers surfaces via PeerLostEvent
+    appEventBus.on<PeerLostEvent>().listen((event) {
+      final device = _discoveryService.getDeviceByUuid(event.uuid);
+      if (device != null) {
+        ConnectivityLogger.info(
+          LogCategory.reconnection,
+          'PeerLostEvent for ${event.deviceName} — scheduling reconnect',
+        );
+        scheduleReconnect(device);
+      } else {
+        // Device may have been removed; synthesise a minimal Device to track reconnect
+        ConnectivityLogger.debug(
+          LogCategory.reconnection,
+          'PeerLostEvent for ${event.uuid} but not in device list. Will pick up on next scan.',
+        );
+      }
+    });
+
+    // 3. Heartbeat ghost detection on KNOWN peers (contacts) — direct callback
+    if (heartbeatManager != null) {
+      heartbeatManager.onGhostDetected = (device) {
+        ConnectivityLogger.info(
+          LogCategory.reconnection,
+          'Ghost detected (known peer ${device.deviceName}) — scheduling reconnect',
+        );
+        scheduleReconnect(device);
+      };
+    }
+
+    // Periodically sync known devices (every 2 mins) to catch devices that
     // were never connected in this session but are in the "Known" list.
     Timer.periodic(const Duration(minutes: 2), (_) => _syncKnownDevices());
     _syncKnownDevices(); // Initial sync
+  }
+
+  /// Subscribe to [RadioStateChangedEvent] so that when Bluetooth or WiFi
+  /// is toggled back ON, we immediately burst reconnection attempts for all
+  /// pending peers (after a short radio warmup delay).
+  ///
+  /// Call this once from your injection / setup code.
+  void installRadioListener() {
+    appEventBus.on<RadioStateChangedEvent>().listen((event) {
+      if (event.isEnabled) {
+        ConnectivityLogger.info(
+          LogCategory.reconnection,
+          '${event.radioType} turned ON — waiting 1.5s for radio warmup then bursting reconnects',
+        );
+        // Short warmup delay: the radio needs ~1s to stabilise before we
+        // can successfully call requestConnection.
+        Future.delayed(const Duration(milliseconds: 1500), () {
+          triggerImmediateBurst();
+        });
+      } else {
+        ConnectivityLogger.info(
+          LogCategory.reconnection,
+          '${event.radioType} turned OFF — pausing reconnect timers',
+        );
+        // Don't cancel — timers will just fire and find no device in range.
+        // They'll back off naturally via the exponential schedule.
+      }
+    });
   }
 
   void _syncKnownDevices() {
@@ -291,17 +353,33 @@ class ReconnectionManager {
         _discoveryService.boostDiscovery();
       }
 
+      // Gap #7: If the device is stuck in `connecting` state (e.g. from a
+      // previous pending timeout that never received onConnectionResult),
+      // reset it to `notConnected` so the connect() guard allows this call.
+      final freshDevice = _discoveryService.getDeviceByUuid(uuid);
+      if (freshDevice != null && freshDevice.state == SessionState.connecting) {
+        ConnectivityLogger.debug(
+          LogCategory.reconnection,
+          'Resetting stale `connecting` state for ${freshDevice.deviceName} before retry',
+        );
+        _discoveryService.updateDeviceState(freshDevice.deviceId, SessionState.notConnected);
+      }
+
       await _discoveryService.connect(device);
 
       // Don't poll state — onConnectionResult fires the callback which calls
-      // onConnectionRestored(). We set a 2s safety timeout in case the callback
+      // onConnectionRestored(). We set a 4s safety timeout in case the callback
       // never arrives (e.g. the platform swallows the result).
       _pendingConnectionTimers[uuid]?.cancel();
-      _pendingConnectionTimers[uuid] = Timer(const Duration(seconds: 4), () { // Increased to 4s for reliability
+      _pendingConnectionTimers[uuid] = Timer(const Duration(seconds: 4), () {
         _pendingConnectionTimers.remove(uuid);
         // Only retry if we're still not connected
         final check = _discoveryService.getDeviceByUuid(uuid);
         if (check != null && check.state != SessionState.connected) {
+          // Gap #7: Also reset `connecting` now so the next attempt isn't blocked.
+          if (check.state == SessionState.connecting) {
+            _discoveryService.updateDeviceState(check.deviceId, SessionState.notConnected);
+          }
           _reputationService.recordConnectionEvent(uuid, false);
           ConnectivityLogger.debug(
             LogCategory.reconnection,

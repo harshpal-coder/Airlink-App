@@ -90,8 +90,23 @@ void main() async {
     aiService.updateLocalMotionState(state);
   });
 
-  // Wire the instant-disconnect callback
-  reconnectionManager.installOn(discoveryService);
+  // Wire the instant-disconnect + heartbeat-ghost + PeerLostEvent callbacks
+  reconnectionManager.installOn(
+    discoveryService,
+    heartbeatManager: getIt<HeartbeatManager>(),
+  );
+
+  // Wire radio toggle recovery (BT/WiFi off → on triggers immediate burst)
+  reconnectionManager.installRadioListener();
+
+  // Gap #3: When DiscoveryService detects STATUS_ALREADY_CONNECTED_TO_ENDPOINT,
+  // notify ReconnectionManager to clear the retry loop for that UUID.
+  discoveryService.onConnectionRestored = (uuid) {
+    reconnectionManager.onConnectionRestored(uuid);
+  };
+
+  // Gap #5: Flush queued messages the moment a reconnection succeeds.
+  messageQueueManager.installOn();
 
   // ── Wire cross-manager events via Event Bus ──
 
