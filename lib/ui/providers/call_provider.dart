@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:permission_handler/permission_handler.dart';
 import '../../services/messaging_service.dart';
 import '../../services/discovery_service.dart';
 import '../../services/audio_call_service.dart';
@@ -15,6 +16,9 @@ class CallProvider extends ChangeNotifier {
   String? _peerUuid;
   String? _peerName;
   bool _isOutgoing = false;
+  
+  bool _isMuted = false;
+  bool _isSpeakerOn = false;
 
   StreamSubscription? _signalSub;
   StreamSubscription? _audioSub;
@@ -23,6 +27,8 @@ class CallProvider extends ChangeNotifier {
   String? get peerUuid => _peerUuid;
   String? get peerName => _peerName;
   bool get isOutgoing => _isOutgoing;
+  bool get isMuted => _isMuted;
+  bool get isSpeakerOn => _isSpeakerOn;
 
   CallProvider({
     required this.messagingService,
@@ -49,6 +55,28 @@ class CallProvider extends ChangeNotifier {
     });
   }
 
+  Future<bool> _requestPermissions() async {
+    final status = await Permission.microphone.request();
+    if (status.isGranted) {
+      return true;
+    } else {
+      debugPrint('[CallProvider] Microphone permission denied');
+      return false;
+    }
+  }
+
+  void toggleMute() {
+    _isMuted = !_isMuted;
+    audioService.setMute(_isMuted);
+    notifyListeners();
+  }
+
+  void toggleSpeaker() async {
+    _isSpeakerOn = !_isSpeakerOn;
+    await audioService.setSpeakerphone(_isSpeakerOn);
+    notifyListeners();
+  }
+
   void _handleCallSignal(Map<String, dynamic> data) async {
     final signal = data['signal'];
     final senderUuid = data['senderUuid'];
@@ -68,7 +96,6 @@ class CallProvider extends ChangeNotifier {
     } else if (signal == 'accept') {
       if (_callState == CallState.ringing && _peerUuid == senderUuid && _isOutgoing) {
         _startCall();
-        notifyListeners();
       }
     } else if (signal == 'reject') {
       if (_callState == CallState.ringing && _peerUuid == senderUuid && _isOutgoing) {
@@ -84,6 +111,10 @@ class CallProvider extends ChangeNotifier {
   Future<void> makeCall(String targetUuid, String targetName) async {
     if (_callState != CallState.none) return;
 
+    if (!await _requestPermissions()) {
+      return;
+    }
+
     _callState = CallState.ringing;
     _peerUuid = targetUuid;
     _peerName = targetName;
@@ -95,6 +126,10 @@ class CallProvider extends ChangeNotifier {
 
   Future<void> acceptCall() async {
     if (_callState == CallState.ringing && !_isOutgoing && _peerUuid != null) {
+      if (!await _requestPermissions()) {
+        await rejectCall();
+        return;
+      }
       await messagingService.sendCallSignal(_peerUuid!, 'accept');
       _startCall();
     }
@@ -116,6 +151,8 @@ class CallProvider extends ChangeNotifier {
 
   void _startCall() async {
     _callState = CallState.inCall;
+    _isMuted = false;
+    _isSpeakerOn = false;
     notifyListeners();
 
     final endpointId = discoveryService.getDeviceByUuid(_peerUuid!)?.deviceId;
@@ -133,6 +170,8 @@ class CallProvider extends ChangeNotifier {
     _peerUuid = null;
     _peerName = null;
     _isOutgoing = false;
+    _isMuted = false;
+    _isSpeakerOn = false;
     notifyListeners();
     
     await audioService.endCallSession();

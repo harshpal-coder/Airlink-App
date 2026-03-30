@@ -17,7 +17,7 @@ class AudioCallService {
   
   bool _isInit = false;
   bool _isRecording = false;
-  bool _isPlaying = false;
+  bool _isMuted = false;
 
   Future<void> init() async {
     if (_isInit) return;
@@ -44,8 +44,11 @@ class AudioCallService {
       androidWillPauseWhenDucked: true,
     ));
 
+    // CRITICAL: Activate the session
+    await session.setActive(true);
+
     _isInit = true;
-    debugPrint('[AudioCallService] Initialized Audio Engines');
+    debugPrint('[AudioCallService] Initialized Audio Engines and Activated Session');
   }
 
   /// Starts capturing audio from the microphone and yields PCM chunks.
@@ -55,7 +58,9 @@ class AudioCallService {
 
     _recordingDataController = StreamController<Uint8List>();
     _recordingDataSubscription = _recordingDataController!.stream.listen((buffer) {
-      onAudioChunk(buffer);
+      if (!_isMuted) {
+        onAudioChunk(buffer);
+      }
     });
 
     await _recorder!.startRecorder(
@@ -66,6 +71,19 @@ class AudioCallService {
     );
     _isRecording = true;
     debugPrint('[AudioCallService] Started recording stream');
+  }
+
+  /// Sets the mute state. If muted, audio chunks are still captured but not sent.
+  void setMute(bool muted) {
+    _isMuted = muted;
+    debugPrint('[AudioCallService] Mute set to: $muted');
+  }
+
+  /// Toggles the speakerphone. (TODO: Fix method defining for FlutterSoundPlayer)
+  Future<void> setSpeakerphone(bool enabled) async {
+    // if (!_isInit) await init();
+    // await _player!.setSpeakerphone(enabled);
+    debugPrint('[AudioCallService] Speakerphone toggle requested (Not implemented yet): $enabled');
   }
 
   /// Stops capturing audio.
@@ -84,7 +102,7 @@ class AudioCallService {
   /// Starts the playback engine eagerly waiting for chunks
   Future<void> startPlaying() async {
     if (!_isInit) await init();
-    if (_isPlaying) return;
+    // We check _isPlaying as a state flag for "should be playing"
     
     await _player!.startPlayerFromStream(
       codec: Codec.pcm16,
@@ -93,32 +111,39 @@ class AudioCallService {
       interleaved: false,
       bufferSize: 8192,
     );
-    _isPlaying = true;
     debugPrint('[AudioCallService] Started playback stream');
   }
 
   /// Feed a received audio chunk into the player buffer
   Future<void> playAudioChunk(Uint8List chunk) async {
-    if (!_isPlaying) {
+    if (!_player!.isPlaying) {
       await startPlaying();
     }
     // feed the raw PCM bytes into the player
-    await _player!.feedUint8FromStream(chunk);
+    try {
+      await _player!.feedUint8FromStream(chunk);
+    } catch (e) {
+      debugPrint('[AudioCallService] Error feeding audio chunk: $e');
+    }
   }
 
   /// Stops playback
   Future<void> stopPlaying() async {
-    if (!_isPlaying) return;
+    if (!_player!.isPlaying) return;
     await _player!.stopPlayer();
-    _isPlaying = false;
     debugPrint('[AudioCallService] Stopped playback stream');
   }
 
   /// Tears down both recording and playback completely 
   Future<void> endCallSession() async {
     debugPrint('[AudioCallService] Ending Call Session');
+    _isMuted = false; // Reset mute for next call
     await stopRecording();
     await stopPlaying();
+    
+    // Deactivate session to be a good citizen
+    final session = await AudioSession.instance;
+    await session.setActive(false);
   }
 
   void dispose() {
