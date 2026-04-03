@@ -8,6 +8,8 @@
     --text-dim: #B0B0B0;
     --glass-border: rgba(255, 255, 255, 0.1);
     --accent-glow: rgba(0, 242, 255, 0.3);
+    --success-color: #00FF88;
+    --error-color: #FF4D4D;
     --font-family: 'Outfit', sans-serif;
 }
 
@@ -530,6 +532,81 @@ nav.scrolled {
 .link-item:hover {
     background: var(--surface-hover);
     border-color: var(--secondary-color);
+}
+
+/* Contact Section Styles */
+.contact-container {
+    max-width: 600px;
+    margin: 0 auto;
+    padding: 3rem;
+}
+
+.contact-form {
+    display: flex;
+    flex-direction: column;
+    gap: 1.5rem;
+}
+
+.form-group {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.form-group label {
+    font-weight: 600;
+    color: var(--text-dim);
+    font-size: 0.9rem;
+    margin-left: 0.5rem;
+}
+
+.contact-form input,
+.contact-form textarea {
+    width: 100%;
+    padding: 1rem 1.5rem;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid var(--glass-border);
+    border-radius: 16px;
+    color: white;
+    font-family: inherit;
+    font-size: 1rem;
+    transition: all 0.3s ease;
+    outline: none;
+}
+
+.contact-form input:focus,
+.contact-form textarea:focus {
+    border-color: var(--primary-color);
+    background: rgba(0, 242, 255, 0.05);
+    box-shadow: 0 0 15px rgba(0, 242, 255, 0.1);
+}
+
+.form-status {
+    margin-top: 1rem;
+    padding: 1rem;
+    border-radius: 12px;
+    text-align: center;
+    font-size: 0.9rem;
+    display: none;
+}
+
+.form-status.success {
+    display: block;
+    background: rgba(0, 255, 136, 0.1);
+    color: var(--success-color);
+    border: 1px solid rgba(0, 255, 136, 0.2);
+}
+
+.form-status.error {
+    display: block;
+    background: rgba(255, 77, 77, 0.1);
+    color: var(--error-color);
+    border: 1px solid rgba(255, 77, 77, 0.2);
+}
+
+#submit-btn.loading {
+    opacity: 0.7;
+    cursor: not-allowed;
 }
 
 /* Footer */

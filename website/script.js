@@ -626,6 +626,61 @@ if (labSection) {
 }
 
 
+// --- EMAILJS INTEGRATION ---
+(function() {
+    // Replace with your actual Public Key from EmailJS Account > Settings
+    emailjs.init({
+      publicKey: "EcX4qrCdou0WD2P5u",
+    });
+})();
+
+const contactForm = document.getElementById('contact-form');
+const submitBtn = document.getElementById('submit-btn');
+const formStatus = document.getElementById('form-status');
+
+if (contactForm) {
+    contactForm.addEventListener('submit', function(event) {
+        event.preventDefault();
+        
+        // UI Feedback: Loading state
+        submitBtn.classList.add('loading');
+        submitBtn.disabled = true;
+        const originalBtnText = submitBtn.innerHTML;
+        submitBtn.innerHTML = '<span>Sending...</span> <i class="fa-solid fa-spinner fa-spin" style="margin-left: 10px;"></i>';
+        
+        formStatus.className = 'form-status';
+        formStatus.innerText = '';
+
+        // These IDs come from your EmailJS Dashboard
+        const serviceID = 'service_vjtg4ps';
+        const templateID = 'template_ht10bts';
+
+        emailjs.sendForm(serviceID, templateID, this)
+            .then(() => {
+                submitBtn.classList.remove('loading');
+                submitBtn.disabled = false;
+                submitBtn.innerHTML = originalBtnText;
+                
+                formStatus.classList.add('success');
+                formStatus.innerText = 'Message sent successfully! We will get back to you soon.';
+                contactForm.reset();
+                
+                // Hide status after 5 seconds
+                setTimeout(() => {
+                    formStatus.style.display = 'none';
+                }, 5000);
+            }, (err) => {
+                submitBtn.classList.remove('loading');
+                submitBtn.disabled = false;
+                submitBtn.innerHTML = originalBtnText;
+                
+                formStatus.classList.add('error');
+                formStatus.innerText = 'Oops! Something went wrong. Please try again later.';
+                console.error('EmailJS Error:', err);
+            });
+    });
+}
+
 // --- NETWORK COMPARISON SLIDER ---
 const compareContainer = document.querySelector('.comparison-slider-container');
 const sliderHandle = document.querySelector('.slider-handle');
