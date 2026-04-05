@@ -159,7 +159,7 @@ document.querySelectorAll('a[href^="#"]').forEach(anchor => {
 });
 
 // 3D Tilt Effect Logic
-const tiltElements = document.querySelectorAll('.hero-image, .feature-card, .tech-card');
+const tiltElements = document.querySelectorAll('.hero-image, .feature-card, .tech-card, .supporter-tier');
 tiltElements.forEach(el => {
     el.addEventListener('mousemove', (e) => {
         const rect = el.getBoundingClientRect();
@@ -792,6 +792,102 @@ document.getElementById('next-slide')?.addEventListener('click', () => {
     currentSlide = (currentSlide + 1) % slides.length;
     showSlide(currentSlide);
 });
+
+// --- LIVE SUPPORTERS FEED (REAL GOOGLE SHEET LINK) ---
+const GOOGLE_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbyuhbmF-r7L7WKnAwaaltFc-ge8Fzb7PcjlQLyF_lj-aoOOKnsNELVkAUQMuxDND_jFIg/exec';
+const trackContainers = {
+    1: document.getElementById('track-1-content'),
+    2: document.getElementById('track-2-content'),
+    3: document.getElementById('track-3-content'),
+    4: document.getElementById('track-4-content')
+};
+
+// State to store supporters for each track
+const supportersByTrack = { 1: [], 2: [], 3: [], 4: [] };
+let lastProcessedCount = 0;
+
+function createSupporterCard(name, tier) {
+    const card = document.createElement('div');
+    card.className = `supporter-card glass ${tier}`;
+    const init = name.split(' ').map(n => n[0]).join('').substring(0, 2).toUpperCase();
+    card.innerHTML = `
+        <div class="supporter-avatar">${init}</div>
+        <div class="supporter-info"><strong>${name}</strong></div>
+    `;
+    return card;
+}
+
+function renderTrack(trackId, tier) {
+    const container = trackContainers[trackId];
+    if (!container) return;
+
+    const list = supportersByTrack[trackId];
+    if (list.length === 0) return;
+
+    // Clear and re-fill
+    container.innerHTML = '';
+    
+    // To create a seamless loop, we need at least enough items to fill the width
+    // If the list is very short (1-2 items), we show them without the loop animation gap
+    // or we repeat them if they are the only ones.
+    const itemsToRender = list.length < 3 ? [...list] : [...list, ...list];
+    
+    itemsToRender.forEach(name => {
+        container.appendChild(createSupporterCard(name, tier));
+    });
+
+    // Toggle animation and centering based on content length
+    container.style.animation = list.length < 2 ? 'none' : '';
+    container.style.justifyContent = list.length < 2 ? 'center' : 'flex-start';
+}
+
+let lastJsonString = "";
+
+async function fetchSupporters() {
+    if (GOOGLE_SCRIPT_URL === 'https://script.google.com/macros/s/AKfycbyuhbmF-r7L7WKnAwaaltFc-ge8Fzb7PcjlQLyF_lj-aoOOKnsNELVkAUQMuxDND_jFIg/exec' || GOOGLE_SCRIPT_URL.includes('macros/s/')) {
+        // Run if we have a valid URL
+    } else return;
+
+    try {
+        const response = await fetch(GOOGLE_SCRIPT_URL);
+        const currentJsonString = await response.text(); 
+        
+        // Only update if the data has actually changed (add, edit, or delete)
+        if (currentJsonString !== lastJsonString) {
+            const supporters = JSON.parse(currentJsonString);
+            lastJsonString = currentJsonString;
+
+            // Reset state for a fresh sync
+            for (let id in supportersByTrack) supportersByTrack[id] = [];
+
+            // Sort everything back into tracks
+            supporters.forEach(supporter => {
+                const amount = parseFloat(supporter.amount) || 0;
+                let trackId;
+
+                if (amount === 101) trackId = 1;
+                else if (amount === 51) trackId = 2;
+                else if (amount === 21) trackId = 3;
+                else if (amount === 11) trackId = 4;
+                else return;
+
+                supportersByTrack[trackId].unshift(supporter.name);
+            });
+
+            // Re-render all 4 tracks to reflect the current sheet state
+            const tiers = { 1: 'tier-platinum', 2: 'tier-gold', 3: 'tier-silver', 4: 'tier-community' };
+            for (let id in supportersByTrack) {
+                renderTrack(id, tiers[id]);
+            }
+        }
+    } catch (error) {
+        console.error('AirLink: Error syncing with Google Sheets:', error);
+    }
+}
+
+// Sync with Google Sheets every 10 seconds
+setInterval(fetchSupporters, 10000);
+fetchSupporters(); // Initial sync on load
 
 // FAQ Toggles
 document.querySelectorAll('.faq-question').forEach(q => {
