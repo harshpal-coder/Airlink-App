@@ -859,10 +859,14 @@ async function fetchSupporters() {
 
             // Reset state for a fresh sync
             for (let id in supportersByTrack) supportersByTrack[id] = [];
+            
+            let totalCollected = 0;
 
             // Sort everything back into tracks
             supporters.forEach(supporter => {
                 const amount = parseFloat(supporter.amount) || 0;
+                totalCollected += amount;
+                
                 let trackId;
 
                 if (amount === 101) trackId = 1;
@@ -873,6 +877,12 @@ async function fetchSupporters() {
 
                 supportersByTrack[trackId].unshift(supporter.name);
             });
+            
+            // Update the live total money UI
+            const totalMoneyEl = document.getElementById('total-money-amount');
+            if (totalMoneyEl) {
+                totalMoneyEl.innerText = `₹${totalCollected}`;
+            }
 
             // Re-render all 4 tracks to reflect the current sheet state
             const tiers = { 1: 'tier-platinum', 2: 'tier-gold', 3: 'tier-silver', 4: 'tier-community' };
