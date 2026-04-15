@@ -75,6 +75,7 @@ class _GroupListScreenState extends State<GroupListScreen> {
           ],
         ),
         child: FloatingActionButton.extended(
+          heroTag: null,
           onPressed: () {
             Navigator.push(
               context,
@@ -282,7 +283,7 @@ class _GroupListScreenState extends State<GroupListScreen> {
     final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
     if (DateTime(time.year, time.month, time.day) == today) {
-      return DateFormat('HH:mm a').format(time);
+      return DateFormat('hh:mm a').format(time);
     } else {
       return DateFormat('MMM d').format(time);
     }

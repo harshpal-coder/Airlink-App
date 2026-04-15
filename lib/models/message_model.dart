@@ -1,4 +1,6 @@
-enum MessageType { text, image, file, audio, pdf, sos }
+import 'dart:convert';
+
+enum MessageType { text, sos, audio, image, file }
 
 enum MessageStatus { sending, sent, delivered, read, failed, queued, relay }
 
@@ -16,6 +18,14 @@ class Message {
   final int? payloadId;
   final double? progress;
   final bool isFileAccepted;
+  final DateTime? expiresAt;
+  final bool isBurned;
+  final String? imagePath;
+  final String? relayedVia;
+  final String? fileName;
+  final int? fileSize;
+  final String? replyToId;
+  final Map<String, String>? reactions;
 
   Message({
     required this.id,
@@ -31,6 +41,14 @@ class Message {
     this.payloadId,
     this.progress,
     this.isFileAccepted = false,
+    this.expiresAt,
+    this.isBurned = false,
+    this.imagePath,
+    this.relayedVia,
+    this.fileName,
+    this.fileSize,
+    this.replyToId,
+    this.reactions,
   });
 
   Map<String, dynamic> toMap() {
@@ -48,6 +66,14 @@ class Message {
       'payloadId': payloadId,
       'progress': progress,
       'isFileAccepted': isFileAccepted ? 1 : 0,
+      'expiresAt': expiresAt?.toIso8601String(),
+      'isBurned': isBurned ? 1 : 0,
+      'imagePath': imagePath,
+      'relayedVia': relayedVia,
+      'fileName': fileName,
+      'fileSize': fileSize,
+      'replyToId': replyToId,
+      'reactions': reactions != null ? jsonEncode(reactions) : null,
     };
   }
 
@@ -66,6 +92,14 @@ class Message {
       payloadId: map['payloadId'],
       progress: map['progress']?.toDouble(),
       isFileAccepted: map['isFileAccepted'] == 1,
+      expiresAt: map['expiresAt'] != null ? DateTime.parse(map['expiresAt']) : null,
+      isBurned: map['isBurned'] == 1,
+      imagePath: map['imagePath'] as String?,
+      relayedVia: map['relayedVia'] as String?,
+      fileName: map['fileName'] as String?,
+      fileSize: map['fileSize'] as int?,
+      replyToId: map['replyToId'] as String?,
+      reactions: map['reactions'] != null ? Map<String, String>.from(jsonDecode(map['reactions'])) : null,
     );
   }
 
@@ -83,6 +117,14 @@ class Message {
     int? payloadId,
     double? progress,
     bool? isFileAccepted,
+    DateTime? expiresAt,
+    bool? isBurned,
+    String? imagePath,
+    String? relayedVia,
+    String? fileName,
+    int? fileSize,
+    String? replyToId,
+    Map<String, String>? reactions,
   }) {
     return Message(
       id: id ?? this.id,
@@ -98,6 +140,14 @@ class Message {
       payloadId: payloadId ?? this.payloadId,
       progress: progress ?? this.progress,
       isFileAccepted: isFileAccepted ?? this.isFileAccepted,
+      expiresAt: expiresAt ?? this.expiresAt,
+      isBurned: isBurned ?? this.isBurned,
+      imagePath: imagePath ?? this.imagePath,
+      relayedVia: relayedVia ?? this.relayedVia,
+      fileName: fileName ?? this.fileName,
+      fileSize: fileSize ?? this.fileSize,
+      replyToId: replyToId ?? this.replyToId,
+      reactions: reactions ?? this.reactions,
     );
   }
 }

@@ -32,8 +32,8 @@
 # Keep all R classes and their fields to prevent resource stripping
 -keep class **.R { *; }
 -keep class **.R$* { *; }
--keep class com.example.app.R { *; }
--keep class com.example.app.R$* { *; }
+-keep class com.harshpal.airlink.R { *; }
+-keep class com.harshpal.airlink.R$* { *; }
 -keepclassmembers class **.R$* {
     public static <fields>;
 }

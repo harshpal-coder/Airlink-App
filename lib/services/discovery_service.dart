@@ -1,10 +1,15 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
+import 'dart:math';
 import 'package:nearby_connections/nearby_connections.dart';
-import 'package:permission_handler/permission_handler.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../models/device_model.dart';
 import 'package:flutter/foundation.dart';
-
+import 'reputation_service.dart';
+import 'peer_ai_service.dart';
+import 'connection_lock.dart';
+import '../utils/connectivity_logger.dart';
 
 import '../models/session_state.dart';
 
@@ -27,6 +32,8 @@ class DiscoveryService {
   Strategy strategy =
       Strategy.P2P_CLUSTER; // Using P2P_CLUSTER for mesh-like connectivity
 
+  static const int _targetDirectPeers = 6; // Target number of simultaneous direct connections (Hardware/API limit is ~10)
+
   final _discoveredDevicesController =
       StreamController<List<Device>>.broadcast();
   final _connectedDeviceController = StreamController<Device>.broadcast();
@@ -46,6 +53,13 @@ class DiscoveryService {
   final _fileReceivedController = StreamController<Map<String, dynamic>>.broadcast();
   Stream<Map<String, dynamic>> get fileReceived => _fileReceivedController.stream;
 
+  final _audioChunkController = StreamController<Map<String, dynamic>>.broadcast();
+  Stream<Map<String, dynamic>> get audioChunkReceived => _audioChunkController.stream;
+
+  final ReputationService _reputationService;
+  final PeerAIService _aiService;
+  final Map<String, DateTime> _connectionStartTimes = {};
+
 
   final List<Device> _devices = [];
   String _userName = 'Unknown';
@@ -53,9 +67,95 @@ class DiscoveryService {
   String? _localUuid;
   bool _isBrowsing = false;
   bool _isAdvertising = false;
-  
+
   bool get isCurrentlyBrowsing => _isBrowsing;
   bool get isCurrentlyAdvertising => _isAdvertising;
+
+  /// Callback invoked when a direct (non-mesh) peer disconnects.
+  /// Used by ReconnectionManager to trigger an immediate reconnect attempt.
+  void Function(Device)? onDirectDisconnect;
+
+  /// Callback invoked when any peer reaches [SessionState.connected].
+  /// Used by MessagingService to auto-send a mesh_update immediately after
+  /// a connection is established — accelerates topology convergence.
+  void Function(Device)? onPeerConnected;
+
+  /// Callback invoked when a reconnection effort needs more aggressive scanning.
+  void Function()? onBoostDiscovery;
+
+  /// Callback invoked when a connection is definitively confirmed (including via
+  /// the STATUS_ALREADY_CONNECTED_TO_ENDPOINT exception path).
+  /// Used by [ReconnectionManager] to clear its retry loop for this UUID.
+  void Function(String uuid)? onConnectionRestored;
+
+  void boostDiscovery() {
+    ConnectivityLogger.debug(LogCategory.discovery, 'Reconnection manager requested discovery boost');
+    onBoostDiscovery?.call();
+  }
+
+  Timer? _refreshTimer;
+  int _currentBatteryLevel = 100;
+
+  void _startRefreshTimer() {
+    _refreshTimer?.cancel();
+    
+    // Aggressive interval based on battery and current connection count
+    int connectedCount = getConnectedDevices().length;
+    bool needsMorePeers = connectedCount < _targetDirectPeers;
+    
+    // Adjusted intervals: 2m default, 4m if battery is low.
+    // Ultra-fast (0) now maps to 30s or 60s instead of 15s/30s.
+    int minutes = needsMorePeers ? 2 : 4; 
+    if (_currentBatteryLevel < 20) {
+      minutes = needsMorePeers ? 5 : 10; 
+    } else if (_devices.any((d) => d.isPluggedIn)) {
+      minutes = 0; // Use seconds for adaptive high performance
+    }
+
+    final jitter = Random().nextInt(15) - 7; // Slightly more jitter for collision avoidance
+    Duration interval;
+    if (minutes == 0) {
+      interval = Duration(seconds: needsMorePeers ? 30 : 60); 
+    } else {
+      interval = Duration(minutes: minutes) + Duration(seconds: jitter);
+    }
+    
+    _refreshTimer = Timer.periodic(interval, (timer) async {
+      _executeRefresh();
+    });
+  }
+
+  Future<int> getBatteryLevel() async {
+    return _currentBatteryLevel;
+  }
+
+  void updateRefreshInterval(Duration interval) {
+    debugPrint('[DiscoveryService] Updating refresh interval to ${interval.inSeconds}s');
+    _refreshTimer?.cancel();
+    _refreshTimer = Timer.periodic(interval, (timer) async {
+      _executeRefresh();
+    });
+  }
+
+  Future<void> _executeRefresh() async {
+      int connectedCount = getConnectedDevices().length;
+      
+      if (connectedCount == 0) {
+          ConnectivityLogger.debug(LogCategory.discovery,
+              'Periodic refresh (No peers): Force-restarting browsing/advertising...');
+          if (_isBrowsing) await startBrowsing(forceRestart: true);
+          if (_isAdvertising) await startAdvertising(forceRestart: true);
+      } else {
+          ConnectivityLogger.debug(LogCategory.discovery,
+              'Periodic refresh (Active connections: $connectedCount): Ensuring radio is alive without restart...');
+          // If already connected, only start if NOT already browsing/advertising (passive check)
+          // Do NOT forceRestart as it drops existing connections
+          if (!_isBrowsing) await startBrowsing(forceRestart: false);
+          if (!_isAdvertising) await startAdvertising(forceRestart: false);
+      }
+  }
+
+  Map<String, String> get knownDevices => _knownDevices;
 
   void setKnownDevices(List<Map<String, String>> devices) {
     _knownDevices = {for (var d in devices) d['uuid']!: d['name']!};
@@ -79,8 +179,8 @@ class DiscoveryService {
     final oldBackbone = _devices[index].isBackbone;
     final oldPluggedIn = _devices[index].isPluggedIn;
 
-    // Only update if significant change to reduce UI churn
-    bool significant = (oldBattery - batteryLevel).abs() > 2 || 
+    // Only update if significant change to reduce UI churn and timer resets
+    bool significant = (oldBattery - batteryLevel).abs() >= 5 || 
                       (isBackbone != null && isBackbone != oldBackbone) ||
                       (isPluggedIn != null && isPluggedIn != oldPluggedIn) ||
                       (batteryLevel < 20 && oldBattery >= 20); // Always notify low battery crossing
@@ -89,12 +189,12 @@ class DiscoveryService {
     if (isBackbone != null) _devices[index].isBackbone = isBackbone;
     if (isPluggedIn != null) _devices[index].isPluggedIn = isPluggedIn;
     
-    // Auto-update RSSI if it was extremely low to make it "visible" to mesh logic
-    if (_devices[index].rssi <= -100) {
-      _devices[index].rssi = -60.0; // Assume decent signal if we get a battery update
-      significant = true;
+    // Update local state if it's "me" or just use it to adjust frequency
+    _currentBatteryLevel = batteryLevel;
+    if (significant) {
+      _startRefreshTimer(); // Adaptive frequency update (less frequent now)
     }
-    
+
     if (significant) {
       _discoveredDevicesController.sink.add(List.from(_devices));
       debugPrint(
@@ -115,17 +215,23 @@ class DiscoveryService {
       debugPrint(
           '[DiscoveryService] RSSI of ${_devices[index].deviceName}: $rssi dBm - Notifying listeners');
     } else {
-      _devices[index].rssi = rssi; // Update silenty
+      _devices[index].rssi = rssi;
+      _aiService.recordTelemetry(_devices[index].uuid ?? deviceId, rssi);
+      _discoveredDevicesController.sink.add(List.from(_devices));
     }
   }
 
+
+  DiscoveryService({ReputationService? reputationService, PeerAIService? aiService})
+      : _reputationService = reputationService ?? ReputationService(),
+        _aiService = aiService ?? PeerAIService();
 
   Future<bool> init(String userName, {String? localUuid}) async {
     _userName = userName;
     _localUuid = localUuid;
     _devices.clear();
-    bool permissionsGranted = await _requestPermissions();
-    return permissionsGranted;
+    _startRefreshTimer();
+    return true;
   }
 
   void setStrategy(Strategy newStrategy) {
@@ -133,18 +239,6 @@ class DiscoveryService {
     debugPrint('[DiscoveryService] Strategy changed to: $newStrategy');
   }
 
-  Future<bool> _requestPermissions() async {
-    await [
-      Permission.bluetooth,
-      Permission.bluetoothAdvertise,
-      Permission.bluetoothConnect,
-      Permission.bluetoothScan,
-      Permission.nearbyWifiDevices,
-      Permission.notification,
-    ].request();
-
-    return true;
-  }
 
   Future<void> startBrowsing({bool forceRestart = false}) async {
     if (_isBrowsing && !forceRestart) {
@@ -155,7 +249,7 @@ class DiscoveryService {
     // Aggressively try to stop to prevent STATUS_ALREADY_DISCOVERING
     if (_isBrowsing || forceRestart) {
       await stopDiscovery();
-      await Future.delayed(const Duration(milliseconds: 300)); // Increased safety delay
+      await Future.delayed(const Duration(milliseconds: 100)); // Minimal safety delay
     }
 
     try {
@@ -189,49 +283,28 @@ class DiscoveryService {
             final existingIndex = _devices.indexWhere((d) => d.deviceId == id);
             if (existingIndex >= 0 &&
                 (_devices[existingIndex].state == SessionState.notConnected)) {
-              
-              // Enhanced Exponential Backoff / Adaptive retry logic
-              int retryCount = _devices[existingIndex].retryCount;
-              DateTime? lastRetry = _devices[existingIndex].lastRetry;
-              
-              if (lastRetry != null) {
-                final diff = DateTime.now().difference(lastRetry).inSeconds;
-                // Wait time: 0, 10, 30, 60, 120... (max 5 minutes)
-                int waitTime = 0;
-                if (retryCount > 0) {
-                  waitTime = (retryCount == 1 ? 10 : (retryCount == 2 ? 30 : (retryCount == 3 ? 60 : 300)));
-                }
 
-                if (diff < waitTime) {
-                  debugPrint('[DiscoveryService] Throttling reconnect to $displayName. Waiting ${waitTime - diff}s more.');
-                  return;
-                }
-              }
-
-              // Tie-breaker: Only one side initiates to avoid connection collision
-              // We use string comparison of UUIDs as a stable, decentralized way to decide
+              // No throttle: when a known peer is in direct range, reconnect immediately.
+              // Tie-breaker: one side initiates to avoid simultaneous collision.
+              // Nearby resolves collisions gracefully via STATUS_ENDPOINT_IO_ERROR.
               if (_localUuid != null &&
                   _localUuid!.compareTo(discoveredUuid) > 0) {
                 debugPrint(
-                  '[DiscoveryService] Found known device "$displayName" ($discoveredUuid). Tie-breaker WON. Initiating auto-reconnect...',
+                  '[DiscoveryService] Found known device "$displayName" ($discoveredUuid). Tie-breaker WON. Initiating instant reconnect...',
                 );
-                _devices[existingIndex].lastRetry = DateTime.now();
-                _devices[existingIndex].retryCount++;
                 connect(_devices[existingIndex]);
               } else {
                 debugPrint(
-                  '[DiscoveryService] Found known device "$displayName" ($discoveredUuid). Tie-breaker LOST. Waiting for peer to initiate...',
+                  '[DiscoveryService] Found known device "$displayName" ($discoveredUuid). Tie-breaker LOST. Waiting 100ms for peer...',
                 );
-                // Wait a bit longer (e.g. 15s), then try ourselves if the peer hasn't connected
-                // This acts as a fallback in case the peer's tie-breaker implementation fails
-                Future.delayed(const Duration(seconds: 15), () {
+                // IMP #9: Wider fallback window (100ms → 400ms) gives the
+                // peer-side adequate time to initiate on congested BT radios.
+                Future.delayed(const Duration(milliseconds: 400), () {
                   final idx = _devices.indexWhere((d) => d.deviceId == id);
                   if (idx >= 0 && _devices[idx].state == SessionState.notConnected) {
                     debugPrint(
-                      '[DiscoveryService] Peer did not connect within fallback timeout. Initiating connection as manual fallback...',
+                      '[DiscoveryService] Peer did not connect within 400ms. Initiating as fallback...',
                     );
-                    _devices[idx].lastRetry = DateTime.now();
-                    _devices[idx].retryCount++;
                     connect(_devices[idx]);
                   }
                 });
@@ -278,7 +351,7 @@ class DiscoveryService {
     // Aggressively try to stop to prevent STATUS_ALREADY_ADVERTISING
     if (_isAdvertising || forceRestart) {
       await stopAdvertising();
-      await Future.delayed(const Duration(milliseconds: 300)); // Increased safety delay
+      await Future.delayed(const Duration(milliseconds: 100)); // Minimal safety delay
     }
 
     try {
@@ -317,7 +390,29 @@ class DiscoveryService {
                 '[DiscoveryService] Payload received from $endpointId (ID: ${payload.id})',
               );
               if (payload.type == PayloadType.BYTES) {
-                String str = utf8.decode(payload.bytes!);
+                Uint8List bytes = payload.bytes!;
+                
+                // Audio chunk check: magic header [0, 1, 2, 3]
+                if (bytes.length > 4 && bytes[0] == 0 && bytes[1] == 1 && bytes[2] == 2 && bytes[3] == 3) {
+                  _audioChunkController.sink.add({
+                    'senderId': endpointId,
+                    'chunk': bytes.sublist(4),
+                  });
+                  return; // Bypass string decoding
+                }
+
+                String str;
+                
+                if (bytes.length > 2 && bytes[0] == 0x1f && bytes[1] == 0x8b) {
+                  try {
+                    final decoded = gzip.decode(bytes);
+                    str = utf8.decode(decoded);
+                  } catch (e) {
+                    str = utf8.decode(bytes);
+                  }
+                } else {
+                  str = utf8.decode(bytes);
+                }
                 _dataReceivedController.sink.add({
                   'senderId': endpointId,
                   'payload': str,
@@ -344,14 +439,42 @@ class DiscoveryService {
         },
         onConnectionResult: (id, status) {
           debugPrint('[DiscoveryService] Connection result for $id: $status');
+          final device = getDeviceById(id);
+          final uuid = device?.uuid;
+          
           if (status == Status.CONNECTED) {
+            _connectionStartTimes[id] = DateTime.now();
+            if (uuid != null) {
+              _reputationService.recordConnectionEvent(uuid, true);
+            }
             updateDeviceState(id, SessionState.connected);
+            // IMP #8: Notify MessagingService so it can send an immediate mesh_update.
+            final connectedDevice = getDeviceById(id);
+            if (connectedDevice != null) {
+              onPeerConnected?.call(connectedDevice);
+            }
           } else {
+            if (uuid != null) {
+              _reputationService.recordConnectionEvent(uuid, false);
+            }
             updateDeviceState(id, SessionState.notConnected);
           }
         },
         onDisconnected: (id) {
+          final startTime = _connectionStartTimes.remove(id);
+          final droppedDevice = getDeviceById(id);
+          if (startTime != null) {
+            final duration = DateTime.now().difference(startTime).inMinutes;
+            final uuid = droppedDevice?.uuid;
+            if (uuid != null) {
+              _reputationService.recordConnectionEvent(uuid, true, durationMinutes: duration);
+            }
+          }
           updateDeviceState(id, SessionState.notConnected);
+          // Notify ReconnectionManager immediately for instant re-attempt
+          if (droppedDevice != null && !droppedDevice.isMesh) {
+            onDirectDisconnect?.call(droppedDevice);
+          }
         },
       );
     } catch (e) {
@@ -369,11 +492,39 @@ class DiscoveryService {
     }
   }
 
+  /// Refreshes the radio by restarting discovery and advertising if they were active.
+  /// This is used for background wake-ups to ensure the Nearby radio stays alive.
+  void refreshRadio() {
+    debugPrint('[DiscoveryService] Refreshing radio (Active: Discovery=$_isBrowsing, Advertising=$_isAdvertising)');
+    if (_isBrowsing) startBrowsing(forceRestart: true);
+    if (_isAdvertising) startAdvertising(forceRestart: true);
+  }
+
   Future<void> connect(Device device) async {
     if (device.state == SessionState.connecting ||
         device.state == SessionState.connected) {
       debugPrint(
-        '[DiscoveryService] Already connecting/connected to ${device.deviceName}. Skipping.',
+        '[DiscoveryService] Already connecting/connected to ${device.deviceName} (${device.uuid ?? device.deviceId}). Skipping.',
+      );
+      return;
+    }
+
+    // Double check by UUID to prevent redundant connections to the same peer via different IDs
+    if (device.uuid != null) {
+      final existing = getDeviceByUuid(device.uuid!);
+      if (existing != null && (existing.state == SessionState.connected || existing.state == SessionState.connecting)) {
+         debugPrint('[DiscoveryService] Already have an active session with UUID ${device.uuid}. Skipping connect to ${device.deviceId}.');
+         updateDeviceState(device.deviceId, existing.state);
+         return;
+      }
+    }
+
+    // Gap #1 — UUID-scoped mutex: prevent duplicate requestConnection calls
+    // when onEndpointFound and ReconnectionManager._attemptReconnect race.
+    final lockUuid = device.uuid ?? device.deviceId;
+    if (!ConnectionLock.acquire(lockUuid)) {
+      debugPrint(
+        '[DiscoveryService] ConnectionLock held for $lockUuid — skipping duplicate connect()',
       );
       return;
     }
@@ -414,7 +565,31 @@ class DiscoveryService {
                 '[DiscoveryService] Payload received from $endpointId (ID: ${payload.id})',
               );
               if (payload.type == PayloadType.BYTES) {
-                String str = utf8.decode(payload.bytes!);
+                Uint8List bytes = payload.bytes!;
+                
+                // Audio chunk check: magic header [0, 1, 2, 3]
+                if (bytes.length > 4 && bytes[0] == 0 && bytes[1] == 1 && bytes[2] == 2 && bytes[3] == 3) {
+                  _audioChunkController.sink.add({
+                    'senderId': endpointId,
+                    'chunk': bytes.sublist(4),
+                  });
+                  return; // Bypass string decoding
+                }
+
+                String str;
+                
+                // GZIP Consistency Fix: Check for magic bytes
+                if (bytes.length > 2 && bytes[0] == 0x1f && bytes[1] == 0x8b) {
+                  try {
+                    final decoded = gzip.decode(bytes);
+                    str = utf8.decode(decoded);
+                  } catch (e) {
+                    str = utf8.decode(bytes);
+                  }
+                } else {
+                  str = utf8.decode(bytes);
+                }
+
                 _dataReceivedController.sink.add({
                   'senderId': endpointId,
                   'payload': str,
@@ -441,14 +616,42 @@ class DiscoveryService {
         },
         onConnectionResult: (id, status) {
           debugPrint('[DiscoveryService] Connection result for $id: $status');
+          final device = getDeviceById(id);
+          final uuid = device?.uuid;
+
           if (status == Status.CONNECTED) {
+            _connectionStartTimes[id] = DateTime.now();
+            if (uuid != null) {
+              _reputationService.recordConnectionEvent(uuid, true);
+            }
             updateDeviceState(id, SessionState.connected);
+            // IMP #8: Notify MessagingService so it can send an immediate mesh_update.
+            final connectedDevice = getDeviceById(id);
+            if (connectedDevice != null) {
+              onPeerConnected?.call(connectedDevice);
+            }
           } else {
+            if (uuid != null) {
+              _reputationService.recordConnectionEvent(uuid, false);
+            }
             updateDeviceState(id, SessionState.notConnected);
           }
         },
         onDisconnected: (id) {
+          final startTime = _connectionStartTimes.remove(id);
+          final droppedDevice = getDeviceById(id);
+          if (startTime != null) {
+            final duration = DateTime.now().difference(startTime).inMinutes;
+            final uuid = droppedDevice?.uuid;
+            if (uuid != null) {
+              _reputationService.recordConnectionEvent(uuid, true, durationMinutes: duration);
+            }
+          }
           updateDeviceState(id, SessionState.notConnected);
+          // Notify ReconnectionManager immediately for instant re-attempt
+          if (droppedDevice != null && !droppedDevice.isMesh) {
+            onDirectDisconnect?.call(droppedDevice);
+          }
         },
       );
     } catch (e) {
@@ -457,6 +660,11 @@ class DiscoveryService {
       if (errStr.contains('STATUS_ALREADY_CONNECTED_TO_ENDPOINT')) {
         debugPrint('[DiscoveryService] Already connected to ${device.deviceName}. Updating state.');
         updateDeviceState(device.deviceId, SessionState.connected);
+        // Gap #3: Inform ReconnectionManager so it clears its retry loop.
+        // Without this, the backoff loop runs forever even though we're connected.
+        if (device.uuid != null) {
+          onConnectionRestored?.call(device.uuid!);
+        }
       } else if (errStr.contains('STATUS_ENDPOINT_IO_ERROR')) {
         // IO error often means both sides tried simultaneously — don't mark
         // as disconnected, just leave state alone and let the next scan retry.
@@ -465,6 +673,9 @@ class DiscoveryService {
       } else {
         updateDeviceState(device.deviceId, SessionState.notConnected);
       }
+    } finally {
+      // Always release the lock so future connect() calls can proceed.
+      ConnectionLock.release(lockUuid);
     }
   }
 
@@ -477,9 +688,37 @@ class DiscoveryService {
     }
   }
 
+  Future<int?> sendAudioChunkToEndpoint(String endpointId, Uint8List chunk) async {
+    try {
+      final header = Uint8List.fromList([0, 1, 2, 3]);
+      final payloadBytes = Uint8List(header.length + chunk.length);
+      payloadBytes.setAll(0, header);
+      payloadBytes.setAll(header.length, chunk);
+      
+      final payloadId = DateTime.now().millisecondsSinceEpoch;
+      await Nearby().sendBytesPayload(endpointId, payloadBytes);
+      return payloadId;
+    } catch (e) {
+      debugPrint('Error sending audio chunk: $e');
+      return null;
+    }
+  }
+
   Future<int?> sendMessageToEndpoint(String endpointId, String message) async {
     try {
-      final bytes = Uint8List.fromList(utf8.encode(message));
+      Uint8List bytes = Uint8List.fromList(utf8.encode(message));
+      
+      // Compress if larger than 128 bytes to save bandwidth
+      if (bytes.length > 128) {
+        try {
+          final compressed = gzip.encode(bytes);
+          bytes = Uint8List.fromList(compressed);
+          debugPrint('[DiscoveryService] Compressed payload from ${utf8.encode(message).length} to ${bytes.length} bytes');
+        } catch (e) {
+          debugPrint('[DiscoveryService] Compression failed: $e');
+        }
+      }
+
       final payloadId = DateTime.now().millisecondsSinceEpoch;
       await Nearby().sendBytesPayload(
         endpointId,
@@ -604,6 +843,18 @@ class DiscoveryService {
     }
   }
 
+  int getDiscoveredDeviceCount() {
+    return _devices.length;
+  }
+
+  Device? getDeviceById(String id) {
+    try {
+      return _devices.firstWhere((d) => d.deviceId == id);
+    } catch (_) {
+      return null;
+    }
+  }
+
   List<Device> getConnectedDevices() {
     return _devices.where((d) => d.state == SessionState.connected).toList();
   }
@@ -621,8 +872,68 @@ class DiscoveryService {
       await stopAdvertising();
       await stopDiscovery();
       await Nearby().stopAllEndpoints();
+      // Release all connection locks so future connect() calls aren't permanently blocked.
+      ConnectionLock.releaseAll();
     } catch (e) {
       debugPrint('[DiscoveryService] Error stopping all: $e');
+    }
+  }
+
+  /// Handle radio (Bluetooth/WiFi) state changes.
+  /// Automatically restarts discovery when radios come back online.
+  Future<void> onRadioStateChanged(String radioType, bool enabled) async {
+    ConnectivityLogger.event(
+      LogCategory.radio,
+      '$radioType ${enabled ? "enabled" : "disabled"}',
+      data: {'browsing': _isBrowsing, 'advertising': _isAdvertising},
+    );
+
+    if (enabled) {
+      // Radio turned ON — restart discovery after a ultra-short stabilization delay
+      await Future.delayed(const Duration(milliseconds: 500));
+      if (_isBrowsing) {
+        ConnectivityLogger.info(LogCategory.discovery,
+            'Radio ON ($radioType) — restarting browsing');
+        await startBrowsing(forceRestart: true);
+      }
+      if (_isAdvertising) {
+        ConnectivityLogger.info(LogCategory.discovery,
+            'Radio ON ($radioType) — restarting advertising');
+        await startAdvertising(forceRestart: true);
+      }
+    } else {
+      // Radio turned OFF — pause gracefully (connections will drop anyway)
+      ConnectivityLogger.warning(LogCategory.discovery,
+          'Radio OFF ($radioType) — discovery paused');
+    }
+  }
+
+  /// Persist discovery state (browsing/advertising) for crash recovery.
+  Future<void> persistDiscoveryState() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool('discovery_was_browsing', _isBrowsing);
+      await prefs.setBool('discovery_was_advertising', _isAdvertising);
+      ConnectivityLogger.debug(LogCategory.discovery,
+          'Persisted state: browsing=$_isBrowsing, advertising=$_isAdvertising');
+    } catch (e) {
+      ConnectivityLogger.error(LogCategory.discovery, 'Failed to persist state', e);
+    }
+  }
+
+  /// Restore discovery state after crash/restart.
+  /// Returns true if discovery should be restarted.
+  Future<bool> restoreDiscoveryState() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final wasBrowsing = prefs.getBool('discovery_was_browsing') ?? false;
+      final wasAdvertising = prefs.getBool('discovery_was_advertising') ?? false;
+      ConnectivityLogger.info(LogCategory.discovery,
+          'Restored state: wasBrowsing=$wasBrowsing, wasAdvertising=$wasAdvertising');
+      return wasBrowsing || wasAdvertising;
+    } catch (e) {
+      ConnectivityLogger.error(LogCategory.discovery, 'Failed to restore state', e);
+      return false;
     }
   }
 
@@ -632,6 +943,7 @@ class DiscoveryService {
     _dataReceivedController.close();
     _payloadProgressController.close();
     _fileReceivedController.close();
+    _refreshTimer?.cancel();
     stopAll();
   }
 }

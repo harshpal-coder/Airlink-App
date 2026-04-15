@@ -1,0 +1,644 @@
+<!DOCTYPE html>
+<html lang="en" prefix="og: https://ogp.me/ns#">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, shrink-to-fit=no">
+    <title>Airlink | Secure P2P Mesh Messaging</title>
+    <meta name="description"
+        content="Airlink is a secure, decentralized messaging app that works without internet. Uses mesh networking and Signal Protocol encryption.">
+
+    <!-- Google Search Console Verification -->
+    <meta name="google-site-verification" content="iqGS1S3lyXLTmfQCDAh62pRxJL02E9k2QGGhDE5gLAw" />
+
+    <!-- Open Graph / Facebook -->
+    <meta property="og:type" content="website">
+    <meta property="og:url" content="https://myairlink.vercel.app/">
+    <meta property="og:title" content="Airlink | Secure Offline P2P Messaging">
+    <meta property="og:description"
+        content="Airlink is a revolutionary decentralized messaging app that works without internet. Uses mesh networking and Signal Protocol encryption.">
+    <meta property="og:image" content="https://myairlink.vercel.app/assets/social-preview.png">
+    <meta property="og:image:width" content="1200">
+    <meta property="og:image:height" content="630">
+    <meta property="og:image:type" content="image/png">
+    <meta property="og:site_name" content="Airlink">
+
+    <!-- Twitter -->
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:url" content="https://myairlink.vercel.app/">
+    <meta name="twitter:title" content="Airlink | Secure Offline P2P Messaging">
+    <meta name="twitter:description"
+        content="Revolutionary decentralized messaging that works without internet. Powered by mesh technology and Signal Protocol encryption.">
+    <meta name="twitter:image" content="https://myairlink.vercel.app/assets/social-preview.png">
+
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&display=swap" rel="stylesheet">
+
+    <!-- Font Awesome for Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+
+    <link rel="stylesheet" href="style.css">
+    <link rel="icon" type="image/png" href="assets/logo.png">
+
+    <!-- EmailJS SDK -->
+    <script type="text/javascript" src="https://cdn.jsdelivr.net/npm/@emailjs/browser@4/dist/email.min.js"></script>
+</head>
+
+<body>
+    <canvas id="canvas-mesh"></canvas>
+
+    <nav id="navbar">
+        <div class="container nav-content">
+            <a href="#" class="logo">
+                <img src="assets/logo.png" alt="Airlink Logo">
+                Airlink
+            </a>
+            <button class="menu-toggle" id="menu-toggle" aria-label="Toggle Navigation">
+                <i class="fa-solid fa-bars"></i>
+            </button>
+            <div class="nav-links" id="nav-links">
+                <a href="#features">Features</a>
+                <a href="#mesh-lab">Mesh Lab</a>
+                <a href="#tech">Technology</a>
+                <a href="#faq">FAQ</a>
+                <a href="#supporters">Supporters</a>
+                <a href="#contact">Contact</a>
+                <a href="#download">Download</a>
+            </div>
+        </div>
+    </nav>
+
+    <header class="hero">
+        <div class="container">
+            <div class="hero-content" data-reveal>
+                <h1>Stay Connected <br><span class="gradient-text">Anywhere, Anytime.</span></h1>
+                <p>Airlink is a revolutionary peer-to-peer messaging app that works without internet or cellular
+                    networks. Communicate securely using mesh technology.</p>
+                <div class="cta-group">
+                    <a href="#download" class="btn btn-primary">Download APK</a>
+                    <a href="https://github.com/harshpal-coder/Airlink-App" target="_blank" class="btn btn-secondary">
+                        <i class="fa-brands fa-github"></i> GitHub
+                    </a>
+                </div>
+            </div>
+            <!-- Mockup Placeholder inside decorative element -->
+            <div class="hero-image" data-reveal>
+                <div class="info-visual glass">
+                    <img src="assets/logo.png"
+                        style="width: 200px; opacity: 0.8; filter: drop-shadow(0 0 20px var(--primary-color));"
+                        alt="Airlink Logo">
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <section id="features">
+        <div class="container">
+            <div style="text-align: center; margin-bottom: 4rem;" data-reveal>
+                <h2 style="font-size: 2.5rem;">Why Airlink?</h2>
+                <p style="color: var(--text-dim);">Built for privacy, resilience, and true decentralization.</p>
+            </div>
+
+            <div class="features-grid">
+                <div class="feature-card glass" data-reveal>
+                    <div class="feature-icon"><i class="fa-solid fa-tower-broadcast"></i></div>
+                    <h3>Offline Messaging</h3>
+                    <p>Chat with friends nearby using Bluetooth and Wi-Fi Direct. No internet connection required.</p>
+                </div>
+
+                <div class="feature-card glass" data-reveal>
+                    <div class="feature-icon"><i class="fa-solid fa-network-wired"></i></div>
+                    <h3>Mesh Networking</h3>
+                    <p>Messages hop through other devices to reach people beyond your direct range. The more users, the
+                        stronger the network.</p>
+                </div>
+
+                <div class="feature-card glass" data-reveal>
+                    <div class="feature-icon"><i class="fa-solid fa-lock"></i></div>
+                    <h3>Military Grade Encryption</h3>
+                    <p>Powered by the Signal Protocol. Your private conversations stay private with end-to-end
+                        encryption.</p>
+                </div>
+                <div class="feature-card glass" data-reveal>
+                    <div class="feature-icon"><i class="fa-solid fa-microphone-lines"></i></div>
+                    <h3>Voice Messaging</h3>
+                    <p>Crystal clear offline voice notes with real-time waveform visualization.</p>
+                    <div class="waveform-container"
+                        style="height: 30px; margin-top: 1rem; display: flex; align-items: flex-end; gap: 2px;">
+                        <div class="bar"></div>
+                        <div class="bar"></div>
+                        <div class="bar"></div>
+                        <div class="bar"></div>
+                        <div class="bar"></div>
+                        <div class="bar"></div>
+                        <div class="bar"></div>
+                        <div class="bar"></div>
+                        <div class="bar"></div>
+                        <div class="bar"></div>
+                    </div>
+                </div>
+
+                <div class="feature-card glass" data-reveal>
+                    <div class="feature-icon"><i class="fa-solid fa-qrcode"></i></div>
+                    <h3>Seamless Pairing</h3>
+                    <p>Simply scan a QR code to securely link with new peers in seconds. No complex setup or manual data
+                        entry.</p>
+                </div>
+
+                <div class="feature-card glass" data-reveal>
+                    <div class="feature-icon"><i class="fa-solid fa-file-export"></i></div>
+                    <h3>Media Sharing</h3>
+                    <p>Share photos, videos, and documents at lightning speed using Wi-Fi Direct. Perfect for remote
+                        collaboration.</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section id="how-it-works" class="glass-section">
+        <div class="container">
+            <div style="text-align: center; margin-bottom: 4rem;" data-reveal>
+                <h2 style="font-size: 2.5rem;">How Airlink Works</h2>
+                <p style="color: var(--text-dim);">The journey of a message in a decentralized world.</p>
+            </div>
+            <div class="infographic-grid">
+                <div class="info-step" data-reveal>
+                    <div class="step-num">01</div>
+                    <h4>Discover</h4>
+                    <p>Airlink finds nearby devices automatically using Bluetooth and Wi-Fi Direct.</p>
+                </div>
+                <div class="info-step" data-reveal>
+                    <div class="step-num">02</div>
+                    <h4>Connect</h4>
+                    <p>Pair securely via QR code to establish a trusted end-to-end encrypted channel.</p>
+                </div>
+                <div class="info-step" data-reveal>
+                    <div class="step-num">03</div>
+                    <h4>Mesh</h4>
+                    <p>Messages hop through available nodes to reach peers even if they're out of range.</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section id="mesh-lab">
+        <div class="container">
+            <div style="text-align: center; margin-bottom: 3rem;" data-reveal>
+                <h2 style="font-size: 2.5rem;">The <span class="gradient-text">Mesh Lab</span></h2>
+                <p style="color: var(--text-dim);">Interact with the canvas below. **Click to place nodes** and see how
+                    they connect!</p>
+            </div>
+            <div id="mesh-lab-container" class="glass"
+                style="height: 600px; cursor: crosshair; overflow: hidden; position: relative; border-color: var(--primary-color);">
+                <div class="mesh-stats glass"
+                    style="position: absolute; top: 1rem; right: 1rem; padding: 1rem; z-index: 10; font-size: 0.8rem; pointer-events: none;">
+                    <div class="stat-item">Nodes: <span id="stat-nodes">0</span></div>
+                    <div class="stat-item">Path Hops: <span id="stat-hops">0</span></div>
+                    <div class="stat-item">Efficiency: <span id="stat-eff">0%</span></div>
+                </div>
+                <!-- Shape Controls -->
+                <div class="mesh-controls glass"
+                    style="position: absolute; bottom: 1rem; left: 1rem; padding: 0.5rem; z-index: 10; display: flex; gap: 0.5rem;">
+                    <button class="shape-btn glass" onclick="setMeshShape('random')"><i
+                            class="fa-solid fa-random"></i></button>
+                    <button class="shape-btn glass" onclick="setMeshShape('heart')"><i class="fa-solid fa-heart"
+                            style="color: #ff4d6d;"></i></button>
+                    <button class="shape-btn glass" onclick="setMeshShape('triangle')"><i class="fa-solid fa-play"
+                            style="transform: rotate(-90deg);"></i></button>
+                    <button class="shape-btn glass" onclick="setMeshShape('circle')"><i
+                            class="fa-solid fa-circle-notch"></i></button>
+                    <button class="shape-btn glass" onclick="setMeshShape('logo')" title="Airlink Logo"><i
+                            class="fa-solid fa-project-diagram"></i></button>
+                    <button class="shape-btn glass" onclick="setMeshShape('grid')"><i
+                            class="fa-solid fa-th"></i></button>
+                    <button class="shape-btn glass" onclick="setMeshShape('infinity')" title="Infinity"><i
+                            class="fa-solid fa-infinity"></i></button>
+                    <button class="shape-btn glass" onclick="setMeshShape('spiral')" title="Spiral"><i
+                            class="fa-solid fa-hurricane"></i></button>
+                    <button class="shape-btn glass" onclick="setMeshShape('star')" title="Star"><i
+                            class="fa-solid fa-star" style="color: #FFD700;"></i></button>
+                    <div style="width: 1px; height: 20px; background: var(--glass-border); margin-left: 0.5rem;"></div>
+                    <input type="text" id="mesh-text-input" placeholder="Type word..." oninput="setMeshText()"
+                        class="glass"
+                        style="background: rgba(255,255,255,0.05); border: 1px solid var(--glass-border); color: white; padding: 0 10px; border-radius: 8px; width: 100px; font-size: 0.8rem; height: 35px; outline: none;">
+                    <button class="shape-btn glass" onclick="setMeshText()"><i class="fa-solid fa-pen-nib"></i></button>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section id="showcase">
+        <div class="container">
+            <div style="text-align: center; margin-bottom: 4rem;" data-reveal>
+                <h2 style="font-size: 2.5rem;">Experience Airlink</h2>
+                <p style="color: var(--text-dim);">A clean, powerful interface designed for everyday use.</p>
+            </div>
+            <div class="carousel-container glass" data-reveal>
+                <div class="carousel-content">
+                    <div class="carousel-item active">
+                        <div class="carousel-layout">
+                            <div class="carousel-text">
+                                <h3>Secure Chats</h3>
+                                <p>End-to-end encryption for every message, voice note, and file.</p>
+                            </div>
+                            <div class="carousel-img glass">
+                                <i class="fa-solid fa-comments"
+                                    style="font-size: 5rem; color: var(--primary-color);"></i>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="carousel-item" style="display: none;">
+                        <div class="carousel-layout">
+                            <div class="carousel-text">
+                                <h3>Network Discovery</h3>
+                                <p>Visualize your local mesh network and see available nodes in real-time.</p>
+                            </div>
+                            <div class="carousel-img glass">
+                                <i class="fa-solid fa-satellite-dish"
+                                    style="font-size: 5rem; color: var(--secondary-color);"></i>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="carousel-nav">
+                    <button id="prev-slide" class="btn btn-secondary"><i class="fa-solid fa-chevron-left"></i></button>
+                    <button id="next-slide" class="btn btn-secondary"><i class="fa-solid fa-chevron-right"></i></button>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section id="tech">
+        <div class="container">
+            <div style="text-align: center; margin-bottom: 4rem;" data-reveal>
+                <h2 style="font-size: 2.5rem;">Powered by Innovation</h2>
+                <p style="color: var(--text-dim);">Leveraging the best protocols for ultra-secure P2P communication.</p>
+            </div>
+            <div class="tech-grid">
+                <div class="tech-card glass" data-reveal>
+                    <div style="color: var(--primary-color); font-size: 2rem; margin-bottom: 1rem;"><i
+                            class="fa-solid fa-fingerprint"></i></div>
+                    <h4>Signal Protocol</h4>
+                    <p>Utilizing X3DH and Double Ratchet algorithms to provide forward secrecy and post-compromise
+                        security.</p>
+                </div>
+                <div class="tech-card glass" data-reveal>
+                    <div style="color: var(--secondary-color); font-size: 2rem; margin-bottom: 1rem;"><i
+                            class="fa-solid fa-tower-broadcast"></i></div>
+                    <h4>Nearby Connections</h4>
+                    <p>High-bandwidth, low-latency communication using fully offline P2P technologies.</p>
+                </div>
+                <div class="tech-card glass" data-reveal>
+                    <div style="color: #FFD700; font-size: 2rem; margin-bottom: 1rem;"><i
+                            class="fa-solid fa-code-branch"></i></div>
+                    <h4>Mesh Routing</h4>
+                    <p>Intelligent, decentralized routing that finds the optimal path through the network dynamically.
+                    </p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+
+    <section id="transparency">
+        <div class="container" style="text-align: center;">
+            <div class="glass" style="padding: 4rem; border-radius: 50px;" data-reveal>
+                <h2 style="font-size: 2.5rem; margin-bottom: 1.5rem;">Open Source. Always.</h2>
+                <p style="color: var(--text-dim); max-width: 700px; margin: 0 auto 2rem;">Airlink is built on the
+                    principles of transparency and freedom. Our code is fully open-source, allowing anyone to audit,
+                    improve, and contribute to a more connected world.</p>
+                <div style="display: flex; justify-content: center; gap: 2rem;">
+                    <div style="text-align: center;">
+                        <h3 class="gradient-text">MIT</h3>
+                        <small>License</small>
+                    </div>
+                    <div style="text-align: center;">
+                        <h3 class="gradient-text">100%</h3>
+                        <small>Auditable</small>
+                    </div>
+                    <div style="text-align: center;">
+                        <h3 class="gradient-text">0</h3>
+                        <small>Trackers</small>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section id="how-it-works-legacy" style="display: none;"> <!-- Moved to new infographic section -->
+        <div class="container">
+            <div class="info-row">
+                <div class="info-text" data-reveal>
+                    <h2 style="font-size: 2.5rem; margin-bottom: 1.5rem;">The Power of <span
+                            class="gradient-text">Mesh</span></h2>
+                    <p>Airlink creates a dynamic network where every device acts as a relay. If you want to send a
+                        message to someone far away, Airlink automatically finds the most efficient path through other
+                        Airlink users in the middle.</p>
+                    <ul style="margin-top: 1.5rem; color: var(--text-dim); list-style: none;">
+                        <li style="margin-bottom: 0.8rem;"><i class="fa-solid fa-circle-check"
+                                style="color: var(--primary-color);"></i> Automatic Peer Discovery</li>
+                        <li style="margin-bottom: 0.8rem;"><i class="fa-solid fa-circle-check"
+                                style="color: var(--primary-color);"></i> Multi-hop Relay Support</li>
+                        <li style="margin-bottom: 0.8rem;"><i class="fa-solid fa-circle-check"
+                                style="color: var(--primary-color);"></i> Intelligent Routing Logic</li>
+                    </ul>
+                </div>
+                <div class="info-visual glass" data-reveal>
+                    <i class="fa-solid fa-project-diagram"
+                        style="font-size: 8rem; color: var(--primary-color); opacity: 0.6;"></i>
+                </div>
+            </div>
+
+            <div class="info-row">
+                <div class="info-text" data-reveal>
+                    <h2 style="font-size: 2.5rem; margin-bottom: 1.5rem;">Your Style, <span class="gradient-text">Your
+                            App</span></h2>
+                    <p>Airlink isn't just powerful; it's personalized. Express yourself with custom chat wallpapers,
+                        unique message sounds, and a sleek dark-first design that saves battery on OLED screens.</p>
+                    <div style="margin-top: 2rem; display: flex; gap: 1rem;">
+                        <div class="glass"
+                            style="padding: 1rem; flex: 1; text-align: center; border-color: var(--secondary-color);">
+                            <i class="fa-solid fa-image"
+                                style="margin-bottom: 0.5rem; color: var(--secondary-color);"></i>
+                            <br><small>Wallpapers</small>
+                        </div>
+                        <div class="glass"
+                            style="padding: 1rem; flex: 1; text-align: center; border-color: var(--primary-color);">
+                            <i class="fa-solid fa-volume-high"
+                                style="margin-bottom: 0.5rem; color: var(--primary-color);"></i>
+                            <br><small>Sound Effects</small>
+                        </div>
+                    </div>
+                </div>
+                <div class="info-visual glass" data-reveal
+                    style="background: linear-gradient(135deg, #1A1C22 0%, #0B0E14 100%);">
+                    <div class="mock-device glass"
+                        style="width: 200px; height: 350px; border-radius: 30px; border: 4px solid var(--glass-border); overflow: hidden; position: relative;">
+                        <div
+                            style="height: 100%; width: 100%; background: url('https://images.unsplash.com/photo-1550684848-fac1c5b4e853?auto=format&fit=crop&w=400&q=80') center; background-size: cover; opacity: 0.6;">
+                        </div>
+                        <div
+                            style="position: absolute; bottom: 20px; left: 15px; right: 15px; height: 40px; background: var(--surface-color); border-radius: 20px;">
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="info-row">
+                <div class="info-text" data-reveal>
+                    <h2 style="font-size: 2.5rem; margin-bottom: 1.5rem;">Always <span
+                            class="gradient-text">Ready</span></h2>
+                    <p>Stay updated even when the app is in the background. Airlink uses a robust background service and
+                        local notifications to ensure you never miss a message, even without an internet connection.</p>
+                    <ul style="margin-top: 1.5rem; color: var(--text-dim); list-style: none;">
+                        <li style="margin-bottom: 0.8rem;"><i class="fa-solid fa-bolt"
+                                style="color: var(--primary-color);"></i> Low Power Consumption</li>
+                        <li style="margin-bottom: 0.8rem;"><i class="fa-solid fa-bell"
+                                style="color: var(--primary-color);"></i> Local Privacy Notifications</li>
+                        <li style="margin-bottom: 0.8rem;"><i class="fa-solid fa-gears"
+                                style="color: var(--primary-color);"></i> Background Peer Reconnection</li>
+                    </ul>
+                </div>
+                <div class="info-visual glass" data-reveal>
+                    <i class="fa-solid fa-microchip"
+                        style="font-size: 8rem; color: var(--primary-color); opacity: 0.6;"></i>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section id="use-cases">
+        <div class="container">
+            <div style="text-align: center; margin-bottom: 5rem;" data-reveal>
+                <h2 style="font-size: 2.5rem;">Where to use <span class="gradient-text">Airlink?</span></h2>
+                <p style="color: var(--text-dim);">Designed for the moments when traditional networks let you down.</p>
+            </div>
+
+            <div class="use-cases-grid">
+                <div class="use-case-card glass" data-reveal>
+                    <div class="use-case-icon"><i class="fa-solid fa-mountain-sun"></i></div>
+                    <h3>Outdoor Adventure</h3>
+                    <p>Stay in touch with your group while hiking, skiing, or camping in remote areas with zero cellular
+                        coverage.</p>
+                </div>
+
+                <div class="use-case-card glass" data-reveal>
+                    <div class="use-case-icon"><i class="fa-solid fa-house-fire"></i></div>
+                    <h3>Emergency Response</h3>
+                    <p>A lifeline during natural disasters. Communicate with family and rescuers when cell towers are
+                        offline.</p>
+                </div>
+
+                <div class="use-case-card glass" data-reveal>
+                    <div class="use-case-icon"><i class="fa-solid fa-users-rays"></i></div>
+                    <h3>Mass Gatherings</h3>
+                    <p>Avoid network congestion at music festivals, sports stadiums, or protests. Mesh keeps the data
+                        flowing.</p>
+                </div>
+
+                <div class="use-case-card glass" data-reveal>
+                    <div class="use-case-icon"><i class="fa-solid fa-user-secret"></i></div>
+                    <h3>Privacy Conscious</h3>
+                    <p>For those who value true anonymity. No central servers means no data tracking or surveillance.
+                    </p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section id="download">
+        <div class="container links-section">
+            <h2 style="font-size: 3rem;" data-reveal>Get Started with <span class="gradient-text">Airlink</span></h2>
+            <p style="color: var(--text-dim); max-width: 600px; margin: 1rem auto;" data-reveal>Download the app, read
+                our research, or contribute to the open-source community.</p>
+
+            <div class="links-grid">
+                <a href="download/app-arm64-v8a-release.apk" class="link-item glass" data-reveal>
+                    <i class="fa-brands fa-android" style="color: #3DDC84;"></i>
+                    <strong>Download APK</strong>
+                    <small>v1.0.0 Stable</small>
+                </a>
+
+                <a href="https://github.com/harshpal-coder/Airlink-App" target="_blank" class="link-item glass"
+                    data-reveal>
+                    <i class="fa-brands fa-github"></i>
+                    <strong>GitHub Repo</strong>
+                    <small>View Source Code</small>
+                </a>
+
+                <a href="research paper/airlink_research_paper.pdf" target="_blank" class="link-item glass" data-reveal>
+                    <i class="fa-solid fa-file-lines" style="color: var(--primary-color);"></i>
+                    <strong>Research Paper</strong>
+                    <small>Understanding the Mesh</small>
+                </a>
+
+                <div class="link-item glass" data-reveal>
+                    <img src="qr/frame.png" alt="Scan to Download"
+                        style="width: 120px; border-radius: 12px; margin-bottom: 0.5rem;">
+                    <strong>Scan to Download</strong>
+                    <small>Android</small>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section id="faq">
+        <div class="container">
+            <div style="text-align: center; margin-bottom: 4rem;" data-reveal>
+                <h2 style="font-size: 2.5rem;">Common Questions</h2>
+                <p style="color: var(--text-dim);">Everything you need to know about the offline mesh.</p>
+            </div>
+            <div class="faq-container">
+                <div class="faq-item glass" data-reveal>
+                    <div class="faq-question">How does Airlink work without internet? <i class="fa-solid fa-plus"></i>
+                    </div>
+                    <div class="faq-answer">Airlink uses the Bluetooth and Wi-Fi antennas in your phone to create direct
+                        connections with other nearby devices, forming a local network independently of the web.</div>
+                </div>
+                <div class="faq-item glass" data-reveal>
+                    <div class="faq-question">Is my data secure? <i class="fa-solid fa-plus"></i></div>
+                    <div class="faq-answer">Yes. Airlink uses the industry-standard Signal Protocol. This means only you
+                        and the recipient can read your messages; even nodes relaying the message cannot see the
+                        content.</div>
+                </div>
+                <div class="faq-item glass" data-reveal>
+                    <div class="faq-question">What is the range? <i class="fa-solid fa-plus"></i></div>
+                    <div class="faq-answer">Direct range is typically 50-100 meters, but the mesh network extends this.
+                        Your message can travel miles by hopping through other users in between.</div>
+                </div>
+                <div class="faq-item glass" data-reveal>
+                    <div class="faq-question">Does it drain my battery? <i class="fa-solid fa-plus"></i></div>
+                    <div class="faq-answer">Airlink is optimized for low power consumption. It uses peer-to-peer
+                        technologies like Bluetooth Low Energy (BLE) where possible and only activates high-bandwidth
+                        Wi-Fi Direct when transferring large files.</div>
+                </div>
+                <div class="faq-item glass" data-reveal>
+                    <div class="faq-question">Can I use it for group chats? <i class="fa-solid fa-plus"></i></div>
+                    <div class="faq-answer">Yes! Airlink supports both private one-on-one messaging and group chats. In
+                        a group, messages are synchronized across all nearby participants automatically.</div>
+                </div>
+                <div class="faq-item glass" data-reveal>
+                    <div class="faq-question">Do I need to create an account? <i class="fa-solid fa-plus"></i></div>
+                    <div class="faq-answer">No. Airlink is completely decentralized. Your identity is tied to your
+                        device's unique cryptographic keys, which are generated locally. No phone number or email
+                        required.</div>
+                </div>
+                <div class="faq-item glass" data-reveal>
+                    <div class="faq-question">What happens if no one is nearby? <i class="fa-solid fa-plus"></i></div>
+                    <div class="faq-answer">If you are completely isolated, messages will be stored on your device and
+                        sent automatically as soon as another Airlink node comes within range.</div>
+                </div>
+                <div class="faq-item glass" data-reveal>
+                    <div class="faq-question">Is it completely free? <i class="fa-solid fa-plus"></i></div>
+                    <div class="faq-answer">Yes, Airlink is an open-source project and completely free to use. There are
+                        no subscriptions, ads, or hidden costs.</div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section id="supporters">
+        <div class="container">
+            <div style="text-align: center; margin-bottom: 4rem; position: relative; display: flex; flex-direction: column; align-items: center;" data-reveal>
+                <div class="live-badge">
+                    <span class="pulsing-dot"></span>
+                    LIVE ACTIVITY
+                </div>
+                <div id="total-money-container" class="glass" style="position: absolute; right: 0; top: 0; padding: 0.5rem 1.2rem; border-radius: 50px; border-color: rgba(0, 242, 255, 0.3); font-weight: 600; display: flex; align-items: center; gap: 8px; box-shadow: 0 0 15px rgba(0, 242, 255, 0.1);">
+                    <i class="fa-solid fa-coins" style="color: #FFD700; filter: drop-shadow(0 0 5px rgba(255, 215, 0, 0.5));"></i> 
+                    <span style="color: var(--text-dim);">Total:</span>
+                    <span id="total-money-amount" style="color: var(--primary-color); font-size: 1.1rem;">₹0</span>
+                </div>
+                <h2 style="font-size: 2.5rem; margin-top: 1rem;">Our <span class="gradient-text">Supporters</span></h2>
+                <p style="color: var(--text-dim);">Powering the future of decentralized communication.</p>
+            </div>
+
+            <div class="supporters-scroll-container horizontal">
+                <!-- Track 1: ₹50+ (Platinum Tier) -->
+                <div class="scroll-track track-1">
+                    <div class="scroll-content horizontal" id="track-1-content">
+                        <!-- Real data will be injected here -->
+                    </div>
+                </div>
+
+                <!-- Track 2: ₹26-50 (Gold Tier) -->
+                <div class="scroll-track track-2">
+                    <div class="scroll-content horizontal" id="track-2-content">
+                        <!-- Real data will be injected here -->
+                    </div>
+                </div>
+
+                <!-- Track 3: ₹11-25 (Silver Tier) -->
+                <div class="scroll-track track-3">
+                    <div class="scroll-content horizontal" id="track-3-content">
+                        <!-- Real data will be injected here -->
+                    </div>
+                </div>
+
+                <!-- Track 4: ₹1-10 (Community Tier) -->
+                <div class="scroll-track track-4">
+                    <div class="scroll-content horizontal" id="track-4-content">
+                        <!-- Real data will be injected here -->
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section id="contact">
+        <div class="container">
+            <div style="text-align: center; margin-bottom: 4rem;" data-reveal>
+                <h2 style="font-size: 2.5rem;">Connect with <span class="gradient-text">Us</span></h2>
+                <p style="color: var(--text-dim);">Have questions about the mesh? We're here to help.</p>
+            </div>
+            <div class="contact-container glass" data-reveal>
+                <form id="contact-form" class="contact-form">
+                    <div class="form-group">
+                        <label for="user_name">Name</label>
+                        <input type="text" name="user_name" id="user_name" placeholder="John Doe" required
+                            class="glass">
+                    </div>
+                    <div class="form-group">
+                        <label for="user_email">Email</label>
+                        <input type="email" name="user_email" id="user_email" placeholder="john@example.com" required
+                            class="glass">
+                    </div>
+                    <div class="form-group">
+                        <label for="message">Message</label>
+                        <textarea name="message" id="message" rows="5" placeholder="How can we help you?" required
+                            class="glass"></textarea>
+                    </div>
+                    <button type="submit" class="btn btn-primary" style="width: 100%;" id="submit-btn">
+                        <span>Send Message</span>
+                        <i class="fa-solid fa-paper-plane" style="margin-left: 10px;"></i>
+                    </button>
+                    <div id="form-status" class="form-status"></div>
+                </form>
+            </div>
+        </div>
+    </section>
+
+    <footer>
+        <div class="container">
+            <div class="logo footer-logo" style="justify-content: center;">
+                <img src="assets/logo.png" alt="Airlink Logo">
+                Airlink
+            </div>
+            <div class="footer-links">
+                <a href="#features">Features</a>
+                <a href="#download">Download</a>
+                <a href="privacy.html">Privacy Policy</a>
+                <a href="terms.html">Terms & Conditions</a>
+                <a href="mailto:contact@airlink.app">Support</a>
+            </div>
+            <p style="color: var(--text-dim); font-size: 0.9rem;">&copy; 2026 Airlink Project. Developed by Harshpal.
+                Open Source under MIT License.</p>
+        </div>
+    </footer>
+
+    <script src="script.js"></script>
+</body>
+
+</html>

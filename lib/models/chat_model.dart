@@ -7,6 +7,8 @@ class Chat {
   final int unreadCount;
   final String? peerProfileImage;
   final bool isFavorite;
+  final int? lastMessageStatus;
+  final bool? lastMessageIsMe;
 
   Chat({
     required this.id,
@@ -17,6 +19,8 @@ class Chat {
     this.unreadCount = 0,
     this.peerProfileImage,
     this.isFavorite = false,
+    this.lastMessageStatus,
+    this.lastMessageIsMe,
   });
 
   Map<String, dynamic> toMap() {
@@ -54,6 +58,8 @@ class Chat {
     int? unreadCount,
     String? peerProfileImage,
     bool? isFavorite,
+    int? lastMessageStatus,
+    bool? lastMessageIsMe,
   }) {
     return Chat(
       id: id ?? this.id,
@@ -64,6 +70,8 @@ class Chat {
       unreadCount: unreadCount ?? this.unreadCount,
       peerProfileImage: peerProfileImage ?? this.peerProfileImage,
       isFavorite: isFavorite ?? this.isFavorite,
+      lastMessageStatus: lastMessageStatus ?? this.lastMessageStatus,
+      lastMessageIsMe: lastMessageIsMe ?? this.lastMessageIsMe,
     );
   }
 }

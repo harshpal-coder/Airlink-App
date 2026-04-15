@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter_background_service/flutter_background_service.dart';
+import 'package:intl/intl.dart';
 
 @pragma('vm:entry-point')
 class AirLinkConnectivityService {
@@ -14,8 +15,8 @@ class AirLinkConnectivityService {
         autoStart: true,
         autoStartOnBoot: true,
         isForegroundMode: true,
-        notificationChannelId: 'airlink_mesh_v2', // Changed to v2 for silent channel
-        initialNotificationTitle: 'AirLink Mesh Active', // title
+        notificationChannelId: 'airlink_mesh_v2',
+        initialNotificationTitle: 'AirLink Mesh Active',
         initialNotificationContent: 'Maintains offline mesh connectivity',
         foregroundServiceNotificationId: 1001,
         foregroundServiceTypes: [
@@ -56,25 +57,35 @@ class AirLinkConnectivityService {
       service.stopSelf();
     });
 
-    // NOTE: We cannot initialize DiscoveryService or MessagingService here
-    // because they depend on nearby_connections, which requires an Activity.
-    // Background services on Android run without an Activity.
+    // On service start/restart, trigger connectivity restoration
+    // This is critical for crash/kill recovery
+    service.invoke('connectivity_restore');
 
     // Adaptive Notification Update & Radio Keep-Alive Timer
-    Timer.periodic(const Duration(seconds: 60), (timer) async {
+    Timer.periodic(const Duration(seconds: 20), (timer) async {
       if (service is AndroidServiceInstance) {
-        // Occasionally "poke" the discovery radio to prevent deep sleep
-        // NOTE: We don't start/stop here because nearby_connections needs an activity,
-        // but we can emit events that the main isolate listens to.
+        // Poke the main isolate to keep discovery radio alive
         service.invoke('keep_alive_poke');
+        
+        // Trigger periodic state save
+        service.invoke('save_connection_state');
+
+        final now = DateTime.now();
+        final timeString = DateFormat('hh:mm:ss a').format(now);
 
         service.setForegroundNotificationInfo(
           title: "AirLink Active",
-          content: "Mesh connectivity running in background",
+          content: "Mesh connectivity running • $timeString",
         );
       }
+    });
+
+    // Slower timer for message queue flush (every 2 minutes)
+    Timer.periodic(const Duration(minutes: 2), (timer) async {
+      service.invoke('flush_message_queue');
     });
 
     debugPrint('[Background] AirLinkConnectivityService started and active');
   }
 }
+

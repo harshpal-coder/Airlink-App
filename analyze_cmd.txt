@@ -1,0 +1,11 @@
+Analyzing app...
+
+  error - lib\services\messaging_service.dart:1189:29 - There's no constant named 'pending' in 'MessageStatus'. Try correcting the name to the name of an existing constant, or defining a constant named 'pending'. - undefined_enum_constant
+  error - lib\services\messaging_service.dart:1190:7 - The named parameter 'attachmentPath' isn't defined. Try correcting the name to an existing named parameter's name, or defining a named parameter with the name 'attachmentPath'. - undefined_named_parameter
+  error - lib\services\messaging_service.dart:1196:5 - The method '_routeOrBufferMessage' isn't defined for the type 'MessagingService'. Try correcting the name to the name of an existing method, or defining a method named '_routeOrBufferMessage'. - undefined_method
+  error - lib\services\messaging_service.dart:1225:7 - The named parameter 'attachmentPath' isn't defined. Try correcting the name to an existing named parameter's name, or defining a named parameter with the name 'attachmentPath'. - undefined_named_parameter
+  error - lib\services\messaging_service.dart:1229:69 - 4 positional arguments expected by '_updateGroupRecord', but 3 found. Try adding the missing arguments. - not_enough_positional_arguments
+warning - lib\ui\screens\group_info_screen.dart:7:8 - Unused import: '../../models/session_state.dart'. Try removing the import directive. - unused_import
+   info - lib\services\messaging_service.dart:1179:23 - Use the null-aware operator '?.' rather than an explicit 'null' comparison. Try using '?.'. - prefer_null_aware_operators
+
+7 issues found.

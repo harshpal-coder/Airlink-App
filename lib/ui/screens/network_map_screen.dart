@@ -65,7 +65,14 @@ class _NetworkMapScreenState extends State<NetworkMapScreen>
           final int count = devices.length;
 
           for (int i = 0; i < count; i++) {
-            final angle = (2 * math.pi * i / count) - (math.pi / 2);
+            double angle;
+            if (count == 2) {
+              // Special case for 2 devices to form a triangle with the center
+              // Instead of 180 deg apart, make them 120 deg apart
+              angle = (i == 0) ? (-5 * math.pi / 6) : (-math.pi / 6);
+            } else {
+              angle = (2 * math.pi * i / count) - (math.pi / 2);
+            }
             final offset = Offset(
               center.dx + radius * math.cos(angle),
               center.dy + radius * math.sin(angle),
@@ -76,6 +83,9 @@ class _NetworkMapScreenState extends State<NetworkMapScreen>
           // Build unique edges for drawing and pulses
           final List<TopologyEdge> edges = [];
           final Set<String> drawnEdges = {};
+          // Track link and node metadata for Dijkstra: uuid -> {rssi, battery, isBackbone, lastUpdate}
+          // This variable is already defined above as:
+          final nodeMetadata = chatProvider.messagingService.meshNodeMetadata;
 
           // 1. Mesh Topology links
           meshTopology.forEach((uuid1, connections) {
@@ -88,7 +98,21 @@ class _NetworkMapScreenState extends State<NetworkMapScreen>
                       ? '$uuid1-$uuid2'
                       : '$uuid2-$uuid1';
                   if (!drawnEdges.contains(edgeKey)) {
-                    edges.add(TopologyEdge(pos1, pos2));
+                    // Calculate quality based on RSSI if available
+                    double quality = 0.8;
+                    final meta1 = nodeMetadata[uuid1];
+                    final meta2 = nodeMetadata[uuid2];
+                    
+                    // Nearby connection RSSI is typically -40 to -100
+                    // We'll normalize this
+                    if (meta1 != null || meta2 != null) {
+                       // This is an estimation since we only have node info, not specific edge info from Dijkstra yet
+                       // But often backbone nodes provide more stable links
+                       bool eitherBackbone = (meta1?['isBackbone'] == true) || (meta2?['isBackbone'] == true);
+                       quality = eitherBackbone ? 0.9 : 0.6;
+                    }
+
+                    edges.add(TopologyEdge(pos1, pos2, quality: quality));
                     drawnEdges.add(edgeKey);
                   }
                 }
@@ -103,13 +127,33 @@ class _NetworkMapScreenState extends State<NetworkMapScreen>
             if (pos != null &&
                 (device.state == SessionState.connected ||
                     device.state == SessionState.connecting)) {
-              edges.add(TopologyEdge(center, pos, isDirect: true));
+              // Direct links have known RSSI
+              double quality = 1.0;
+              if (device.rssi < -80) {
+                quality = 0.4;
+              } else if (device.rssi < -60) {
+                quality = 0.7;
+              }
+              
+              edges.add(TopologyEdge(center, pos, isDirect: true, quality: quality));
             }
           }
 
-          // if (edges.length > 3) {
-          //    _pulseController.duration = Duration(seconds: (edges.length * 1.5).clamp(8, 20).toInt());
-          // }
+          // 3. Highlight Active Paths
+          final activePaths = chatProvider.messagingService.activePaths;
+          final List<TopologyEdge> activeEdges = [];
+          
+          activePaths.forEach((targetUuid, path) {
+            Offset currentPos = center;
+            
+            for (var hopUuid in path) {
+              final hopPos = uuidToPos[hopUuid];
+              if (hopPos != null) {
+                activeEdges.add(TopologyEdge(currentPos, hopPos, isHighlight: true));
+                currentPos = hopPos;
+              }
+            }
+          });
 
           return Stack(
             children: [
@@ -131,6 +175,7 @@ class _NetworkMapScreenState extends State<NetworkMapScreen>
                     size: size,
                     painter: TopologyPainter(
                       edges: edges,
+                      activeEdges: activeEdges,
                       pulseValue: _pulseController.value,
                       center: center,
                       radius: radius,
@@ -328,7 +373,14 @@ class TopologyEdge {
   final Offset start;
   final Offset end;
   final bool isDirect;
-  TopologyEdge(this.start, this.end, {this.isDirect = false});
+  final bool isHighlight;
+  final double quality; // 0.0 to 1.0
+  
+  TopologyEdge(this.start, this.end, {
+    this.isDirect = false, 
+    this.isHighlight = false,
+    this.quality = 1.0,
+  });
 }
 
 class GridPainter extends CustomPainter {
@@ -356,12 +408,14 @@ class GridPainter extends CustomPainter {
 
 class TopologyPainter extends CustomPainter {
   final List<TopologyEdge> edges;
+  final List<TopologyEdge> activeEdges;
   final double pulseValue;
   final Offset center;
   final double radius;
 
   TopologyPainter({
     required this.edges,
+    required this.activeEdges,
     required this.pulseValue,
     required this.center,
     required this.radius,
@@ -371,9 +425,9 @@ class TopologyPainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     final paint = Paint()..isAntiAlias = true;
 
-    // Background Pulse
-    paint.color = AppColors.primary.withValues(alpha: 0.05 * (1 - pulseValue));
-    canvas.drawCircle(center, radius * (1 + pulseValue * 1.5), paint);
+    // Background Pulse - REMOVED per user request
+    // paint.color = AppColors.primary.withValues(alpha: 0.05 * (1 - pulseValue));
+    // canvas.drawCircle(center, radius * (1 + pulseValue * 1.5), paint);
 
     // Links
     final directLinkPaint = Paint()
@@ -382,30 +436,63 @@ class TopologyPainter extends CustomPainter {
       ..style = PaintingStyle.stroke;
 
     final meshLinkPaint = Paint()
-      ..color = AppColors.primary.withValues(alpha: 0.15)
-      ..strokeWidth = 1.0
+      ..color = AppColors.primary.withValues(alpha: 0.3)
+      ..strokeWidth = 1.2
       ..style = PaintingStyle.stroke;
 
     for (var edge in edges) {
+      final linePaint = edge.isDirect ? directLinkPaint : meshLinkPaint;
+      
+      // Dynamic link styling based on quality
+      if (edge.quality < 0.5) {
+        // Weak links: dashed or very faint
+        linePaint.strokeWidth = 0.8;
+        linePaint.color = linePaint.color.withValues(alpha: 0.15);
+      } else if (edge.quality < 0.8) {
+        linePaint.strokeWidth = 1.0;
+        linePaint.color = linePaint.color.withValues(alpha: 0.3);
+      } else {
+        linePaint.strokeWidth = 1.8;
+        linePaint.color = linePaint.color.withValues(alpha: 0.5);
+      }
+
       canvas.drawLine(
         edge.start,
         edge.end,
-        edge.isDirect ? directLinkPaint : meshLinkPaint,
+        linePaint,
       );
     }
 
-    // Transmission Pulse (One at a time)
-    if (edges.isNotEmpty) {
-      final int activeIndex =
-          (pulseValue * edges.length).floor() % edges.length;
-      final double progress = (pulseValue * edges.length) % 1.0;
-      final edge = edges[activeIndex];
+    // Highlight Active Edges
+    final highlightPaint = Paint()
+      ..color = Colors.amber.withValues(alpha: 0.8)
+      ..strokeWidth = 3.0
+      ..style = PaintingStyle.stroke;
+    
+    for (var edge in activeEdges) {
+      canvas.drawLine(edge.start, edge.end, highlightPaint);
+      
+      // Add a glow effect to active paths
+      canvas.drawLine(
+        edge.start, 
+        edge.end, 
+        Paint()
+          ..color = Colors.amber.withValues(alpha: 0.2)
+          ..strokeWidth = 8.0
+          ..style = PaintingStyle.stroke
+          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 5)
+      );
+    }
 
+    // Transmission Pulses (One for each edge)
+    final allEdges = [...edges, ...activeEdges];
+    for (var edge in allEdges) {
+      final double progress = (pulseValue * 3) % 1.0; // Faster pulses
       final Offset pulsePos = Offset.lerp(edge.start, edge.end, progress)!;
 
       // Pulse Glow
-      paint.color = (edge.isDirect ? AppColors.success : AppColors.primary)
-          .withValues(alpha: 0.3);
+      paint.color = (edge.isHighlight ? Colors.amber : (edge.isDirect ? AppColors.success : AppColors.primary))
+          .withValues(alpha: 0.4);
       canvas.drawCircle(pulsePos, 4, paint);
 
       // Pulse Core

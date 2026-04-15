@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:google_fonts/google_fonts.dart';
-import '../../models/session_state.dart';
+
 import '../../services/chat_provider.dart';
 import '../../core/constants.dart';
 
@@ -20,9 +20,18 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
   @override
   Widget build(BuildContext context) {
     final chatProvider = Provider.of<ChatProvider>(context);
-    final availablePeers = chatProvider.discoveredDevices
-        .where((p) => p.state == SessionState.connected)
-        .toList();
+    final Map<String, String> availablePeersMap = {};
+    for (var chat in chatProvider.chats) {
+      if (chat.peerUuid.isNotEmpty) {
+        availablePeersMap[chat.peerUuid] = chat.peerName;
+      }
+    }
+    for (var peer in chatProvider.discoveredDevices) {
+      if (peer.uuid != null) {
+        availablePeersMap[peer.uuid!] = peer.deviceName;
+      }
+    }
+    final availablePeers = availablePeersMap.entries.toList();
 
     return Scaffold(
       backgroundColor: const Color(0xFF0F1720),
@@ -56,7 +65,7 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
                 _nameController.text,
                 _selectedPeerUuids,
               );
-              if (!mounted) return;
+              if (!context.mounted) return;
               Navigator.pop(context);
             },
             child: Text(
@@ -93,33 +102,34 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
             child: availablePeers.isEmpty
                 ? Center(
                     child: Text(
-                      'No connected members available',
+                      'No members available',
                       style: TextStyle(color: Colors.white54),
                     ),
                   )
                 : ListView.builder(
                     itemCount: availablePeers.length,
                     itemBuilder: (context, index) {
-                      final peer = availablePeers[index];
+                      final peerUuid = availablePeers[index].key;
+                      final peerName = availablePeers[index].value;
                       return CheckboxListTile(
-                        value: _selectedPeerUuids.contains(peer.uuid),
+                        value: _selectedPeerUuids.contains(peerUuid),
                         onChanged: (val) {
                           setState(() {
                             if (val == true) {
-                              _selectedPeerUuids.add(peer.uuid!);
+                              _selectedPeerUuids.add(peerUuid);
                             } else {
-                              _selectedPeerUuids.remove(peer.uuid);
+                              _selectedPeerUuids.remove(peerUuid);
                             }
                           });
                         },
                         title: Text(
-                          peer.deviceName,
+                          peerName,
                           style: const TextStyle(color: Colors.white),
                         ),
                         secondary: CircleAvatar(
                           backgroundColor: AppColors.primary.withValues(alpha: 0.1),
                           child: Text(
-                            peer.deviceName[0],
+                            peerName.isNotEmpty ? peerName[0] : '?',
                             style: TextStyle(color: AppColors.primary),
                           ),
                         ),
